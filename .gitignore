@@ -1,7 +1,13 @@
 /build*/
-/data/kernels/
 /out/
 *.usda
 !tests/**/*.usda
 orrery-*.png
 __pycache__/
+
+# Fetched from NASA/JPL and generated from it at build time; never committed
+# (tools/fetch_data.py, tools/build_catalog.py, DATA_SOURCES.md).
+/data/kernels/
+/data/raw/
+/data/catalog/
+/tests/data/

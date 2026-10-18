@@ -1,5 +1,6 @@
 // Accuracy against JPL Horizons. Every reference vector in tests/data/vectors
-// was fetched from Horizons (tools/fetch_data.py) and is compared with what
+// is fetched from Horizons at build time (tools/fetch_data.py, then
+// tools/build_catalog.py; nothing is committed) and is compared with what
 // the orrery computes from DE440s, the element tables, the trajectories and
 // the SBDB elements. Tolerances are per source and printed with each result.
 #include <cmath>
@@ -105,15 +106,22 @@ int main() {
 
     SECTION("two-body propagation of SBDB elements (Vesta) vs Horizons' perturbed orbit");
     {
+        // The SBDB elements are fetched at build time, so Vesta is found by a
+        // window around its orbit (a 2.3614 au, e 0.0902, i 7.14 deg) wide
+        // enough for any later SBDB solution, not by exact values. No other
+        // numbered main-belt asteroid with H < 13 falls inside it.
         const SmallBody* vesta = nullptr;
-        // Vesta is the main-belt sample's fourth object (numbered 4).
+        int matches = 0;
         for (const SmallBody& sb : sys.smallBodies()) {
             if (sys.groups()[static_cast<size_t>(sb.group)].id == "main_belt" &&
-                std::fabs(sb.elements.a - 2.3613659651) < 1e-6) {
+                std::fabs(sb.elements.a - 2.3614) < 0.002 && std::fabs(sb.elements.e - 0.0902) < 0.002 &&
+                std::fabs(sb.elements.i - 7.14) < 0.05) {
                 vesta = &sb;
+                ++matches;
             }
         }
         CHECK(vesta != nullptr);
+        CHECK(matches == 1);
         if (vesta) {
             const CsvTable t = readCsv(kRoot + "/tests/data/vectors/vesta.csv");
             for (size_t k = 0; k < t.rows.size(); ++k) {

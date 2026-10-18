@@ -18,7 +18,7 @@ constexpr size_t kRecordBytes = 1024;
 
 SpkFile::SpkFile(const std::string& path) {
     std::ifstream in(path, std::ios::binary);
-    if (!in) bad(path, "cannot open (run tools/fetch_data.py kernels)");
+    if (!in) bad(path, "cannot open (run tools/fetch_data.py all, then tools/build_catalog.py)");
     std::vector<char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     if (bytes.size() < kRecordBytes || bytes.size() % 8 != 0) bad(path, "not a DAF file");
     if (std::memcmp(bytes.data(), "DAF/SPK ", 8) != 0) bad(path, "not an SPK file (no DAF/SPK id word)");
