@@ -1,0 +1,7 @@
+/build*/
+/data/kernels/
+/out/
+*.usda
+!tests/**/*.usda
+orrery-*.png
+__pycache__/

@@ -1,0 +1,7 @@
+# Small-body samples: the SBDB query in tools/bodies.py for each, and how many objects it gave.
+group,label,count,r,g,b
+main_belt,Main-belt asteroids (numbered; H < 13),6061,0.620,0.600,0.560
+trojans,Jupiter trojans (numbered; H < 13),1558,0.550,0.750,0.450
+near_earth,Near-Earth asteroids (numbered; H < 17),436,0.950,0.550,0.450
+centaurs,Centaurs (orbit condition code <= 5),671,0.800,0.600,0.850
+trans_neptunian,Trans-Neptunian objects: Kuiper belt and scattered disc (condition code <= 5),3858,0.550,0.700,0.950

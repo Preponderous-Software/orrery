@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  LIBGL_ALWAYS_SOFTWARE: "1"
+  GALLIUM_DRIVER: llvmpipe
+  __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/50_mesa.json
+
+jobs:
+  test:
+    name: Data, ephemeris tests, render smoke test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build and llvmpipe dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ libegl1 libegl-mesa0 libgl1-mesa-dri \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev
+          cmake --version
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.13"
+
+      - name: Cache NAIF kernels
+        uses: actions/cache@v4
+        with:
+          path: data/kernels
+          key: naif-kernels-${{ hashFiles('data/kernels.sha256') }}
+
+      - name: Fetch NAIF kernels (SHA-256 checked)
+        run: uv run --python 3.12 tools/fetch_data.py kernels
+
+      - name: Catalogue is reproducible from the committed raw data
+        run: |
+          uv run --python 3.12 tools/build_catalog.py
+          git diff --exit-code --stat -- data/catalog tests/data
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DORRERY_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build -j4
+
+      - name: Tests (time, Kepler, scale, ephemeris vs Horizons, headless render smoke test)
+        run: ctest --test-dir build --output-on-failure
+
+      - name: USD export opens in OpenUSD
+        run: |
+          build/orrery --date 2026-10-18 --export-usda build/check.usda
+          uv run --python 3.12 --with usd-core==25.8 tests/check_usda.py build/check.usda
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-frames
+          path: build/smoke/
+          if-no-files-found: ignore

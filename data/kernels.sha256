@@ -1,0 +1,6 @@
+# SHA-256 of each NAIF generic kernel the orrery uses, by path under
+# https://naif.jpl.nasa.gov/pub/naif/generic_kernels/ (fetched by
+# tools/fetch_data.py kernels into data/kernels/, which git ignores).
+c1c7feeab882263fc493a9d5a5b2ddd71b54826cdf65d8d17a76126b260a49f2 spk/planets/de440s.bsp
+3dff7b1dbeceaa01f25467767d3fa25816051c85d162d1edf04acb310ee28bb1 pck/pck00011.tpc
+924ddf4fb9ead9fe8a1aa55780bcabde40b09d00065d58226e24b68d8092f140 pck/gm_de440.tpc

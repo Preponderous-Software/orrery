@@ -1,0 +1,528 @@
+#include "renderer.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+
+#include "orrery/time.hpp"
+
+namespace orrery {
+namespace {
+
+float f(double v) { return static_cast<float>(v); }
+
+void setVec(float out[3], const Vec3& v) {
+    out[0] = f(v.x);
+    out[1] = f(v.y);
+    out[2] = f(v.z);
+}
+
+std::string thousands(double v) {
+    char buf[64];
+    std::snprintf(buf, sizeof buf, "%.0f", v);
+    std::string s = buf, out;
+    const size_t start = s[0] == '-' ? 1 : 0;
+    for (size_t i = 0; i < s.size(); ++i) {
+        out += s[i];
+        const size_t rest = s.size() - i - 1;
+        if (i >= start && rest > 0 && rest % 3 == 0) out += ',';
+    }
+    return out;
+}
+
+// Two unit vectors perpendicular to n and to each other.
+void basis(const Vec3& n, Vec3& u, Vec3& v) {
+    const Vec3 helper = std::fabs(n.z) < 0.9 ? Vec3{0, 0, 1} : Vec3{1, 0, 0};
+    u = normalize(cross(helper, n));
+    v = cross(n, u);
+}
+
+constexpr float kWhite[4] = {1, 1, 1, 1};
+constexpr float kDim[4] = {0.75f, 0.78f, 0.85f, 1};
+constexpr float kWarn[4] = {1.0f, 0.75f, 0.35f, 1};
+
+}  // namespace
+
+Renderer::Renderer(strata::Engine& engine, const SolarSystem& system) : engine_(engine), sys_(system) {}
+
+void Renderer::layout(const SystemState& state, const Scale& scale) {
+    const auto& bodies = sys_.bodies();
+    const size_t n = bodies.size();
+    drawn_.assign(n, Vec3{});
+    drawnRadius_.assign(n, 0.0);
+    const Vec3 sunTrue = state.positions[0];
+    for (size_t i = 0; i < n; ++i) {
+        drawnRadius_[i] = bodies[i].radiusKm > 0 ? scale.radius(bodies[i].radiusKm, i == 0) : 0.0;
+    }
+    drawn_[0] = sunTrue;
+    // Heliocentric objects first, then satellites (whose parents are placed).
+    for (int pass = 0; pass < 2; ++pass) {
+        for (size_t i = 1; i < n; ++i) {
+            const int parent = bodies[i].parent;
+            const bool helio = parent <= 0;
+            if (helio != (pass == 0)) continue;
+            if (helio) {
+                drawn_[i] = scale.heliocentric(state.positions[i], sunTrue, sunTrue);
+            } else {
+                const auto p = static_cast<size_t>(parent);
+                drawn_[i] = scale.satellite(state.positions[i], state.positions[p], drawn_[p], bodies[p].radiusKm);
+            }
+        }
+    }
+    drawnSmall_.resize(state.smallBodies.size());
+    for (size_t k = 0; k < state.smallBodies.size(); ++k) {
+        drawnSmall_[k] = scale.heliocentric(state.smallBodies[k], sunTrue, sunTrue);
+    }
+}
+
+double Renderer::defaultDistance(int body) const {
+    const auto& bodies = sys_.bodies();
+    const double tanHalf = std::tan(25.0 * kDegToRad);
+    if (body == 0) {
+        // The planets out to Jupiter in view.
+        const int jupiter = sys_.find("Jupiter");
+        const double extent = jupiter >= 0 ? length(drawn_[static_cast<size_t>(jupiter)] - drawn_[0]) : 5 * kAuKm;
+        return extent * 1.25 / tanHalf;
+    }
+    double extent = drawnRadius_[static_cast<size_t>(body)] * 6.0;
+    for (size_t j = 0; j < bodies.size(); ++j) {
+        if (bodies[j].parent == body) extent = std::max(extent, 1.15 * length(drawn_[j] - drawn_[static_cast<size_t>(body)]));
+    }
+    if (extent <= 0) extent = 0.2 * kAuKm;  // comets and spacecraft have no size
+    return extent / tanHalf;
+}
+
+Vec3 Renderer::forwardOf(const CameraState& cam) const {
+    const double y = cam.yawDeg * kDegToRad, p = cam.pitchDeg * kDegToRad;
+    const Vec3 outward{std::cos(p) * std::cos(y), std::cos(p) * std::sin(y), std::sin(p)};
+    return cam.freeFly ? outward : -outward;
+}
+
+Vec3 Renderer::eyeOf(const CameraState& cam) const {
+    if (cam.freeFly) return cam.eye;
+    return drawn_[static_cast<size_t>(cam.focus)] - forwardOf(cam) * cam.distance;
+}
+
+void Renderer::addLine(const Vec3& a, const Vec3& b, const float color[4], const Vec3& origin) {
+    StrataLineVertex va{}, vb{};
+    setVec(va.position, a - origin);
+    setVec(vb.position, b - origin);
+    std::memcpy(va.color, color, sizeof va.color);
+    std::memcpy(vb.color, color, sizeof vb.color);
+    lines_.push_back(va);
+    lines_.push_back(vb);
+}
+
+void Renderer::drawOrbit(int body, const SystemState& state, const Scale& scale, const Vec3& origin) {
+    const auto& b = sys_.bodies()[static_cast<size_t>(body)];
+    Elements el;
+    if (!sys_.osculating(body, state.jdTdb, state, el) || el.e >= 1.0) return;
+    const int parent = b.parent < 0 ? 0 : b.parent;
+    const auto p = static_cast<size_t>(parent);
+    const float alpha = b.kind == BodyKind::Moon ? 0.45f : 0.55f;
+    const float color[4] = {b.color[0] * 0.8f + 0.1f, b.color[1] * 0.8f + 0.1f, b.color[2] * 0.8f + 0.1f, alpha};
+    const int segments = b.kind == BodyKind::Comet ? 720 : 256;
+    Vec3 previous;
+    for (int k = 0; k <= segments; ++k) {
+        const double E = 2 * kPi * k / segments;
+        const Vec3 truePos = state.positions[p] + positionAtEccentricAnomaly(el, E);
+        const Vec3 drawnPos = parent == 0 ? scale.heliocentric(truePos, state.positions[0], drawn_[0])
+                                          : scale.satellite(truePos, state.positions[p], drawn_[p],
+                                                            sys_.bodies()[p].radiusKm);
+        if (k > 0) addLine(previous, drawnPos, color, origin);
+        previous = drawnPos;
+    }
+}
+
+void Renderer::addRings(int planet, const SystemState& state, const Scale& scale, const Vec3& origin) {
+    Vec3 pole;
+    if (!sys_.pole(planet, state.jdTdb, pole)) return;
+    Vec3 u, v;
+    basis(pole, u, v);
+    const auto& body = sys_.bodies()[static_cast<size_t>(planet)];
+    const Vec3 centre = drawn_[static_cast<size_t>(planet)] - origin;
+    const int segments = 192;
+    for (const Ring& ring : sys_.rings()) {
+        if (ring.planet != planet) continue;
+        const double r0 = scale.ringRadius(ring.innerKm, body.radiusKm);
+        const double r1 = scale.ringRadius(ring.outerKm, body.radiusKm);
+        const float shade = 0.35f + 0.65f * ring.alpha;
+        for (int side = 0; side < 2; ++side) {
+            const Vec3 normal = side == 0 ? pole : -pole;
+            const auto base = static_cast<uint32_t>(meshPositions_.size() / 3);
+            for (int k = 0; k <= segments; ++k) {
+                const double a = 2 * kPi * k / segments;
+                const Vec3 dir = u * std::cos(a) + v * std::sin(a);
+                for (double r : {r0, r1}) {
+                    const Vec3 p = centre + dir * r;
+                    meshPositions_.insert(meshPositions_.end(), {f(p.x), f(p.y), f(p.z)});
+                    meshNormals_.insert(meshNormals_.end(), {f(normal.x), f(normal.y), f(normal.z)});
+                    meshColors_.insert(meshColors_.end(),
+                                       {ring.color[0] * shade, ring.color[1] * shade, ring.color[2] * shade});
+                }
+            }
+            for (int k = 0; k < segments; ++k) {
+                const uint32_t i0 = base + 2 * static_cast<uint32_t>(k), i1 = i0 + 1, i2 = i0 + 2, i3 = i0 + 3;
+                // Counter-clockwise seen from the side the normal points to.
+                if (side == 0) {
+                    meshIndices_.insert(meshIndices_.end(), {i0, i2, i1, i1, i2, i3});
+                } else {
+                    meshIndices_.insert(meshIndices_.end(), {i0, i1, i2, i1, i3, i2});
+                }
+            }
+        }
+    }
+}
+
+void Renderer::text(float x, float y, float size, const float color[4], const std::string& s) {
+    textStorage_.push_back(s);
+    StrataText t{};
+    t.x = x;
+    t.y = y;
+    t.pixel_size = size;
+    t.flags = STRATA_TEXT_SHADOW;
+    std::memcpy(t.color, color, sizeof t.color);
+    t.utf8 = textStorage_.back().c_str();
+    texts_.push_back(t);
+}
+
+FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, const ViewOptions& view, int width,
+                           int height) {
+    const auto& bodies = sys_.bodies();
+    items_.clear();
+    points_.clear();
+    lines_.clear();
+    texts_.clear();
+    textStorage_.clear();
+    meshPositions_.clear();
+    meshNormals_.clear();
+    meshColors_.clear();
+    meshIndices_.clear();
+    FrameReport report;
+
+    const Vec3 origin = eyeOf(cam);  // floating origin: everything is drawn relative to the eye
+    const Vec3 forward = forwardOf(cam);
+
+    // Near plane from the closest surface, far plane a fixed ratio beyond it.
+    // Lines and points use depth clamp, so nothing beyond the far plane is lost.
+    double nearest = 1e300;
+    for (size_t i = 0; i < bodies.size(); ++i) {
+        if (drawnRadius_[i] > 0 && state.valid[i]) {
+            nearest = std::min(nearest, length(drawn_[i] - origin) - drawnRadius_[i]);
+        }
+    }
+    const double nearPlane = std::max(0.01, std::min(nearest * 0.5, 1e9));
+    const double farPlane = nearPlane * 1e6;
+    const float zero[3] = {0, 0, 0};
+    const float target[3] = {f(forward.x), f(forward.y), f(forward.z)};
+    const float up[3] = {0, 0, 1};  // ecliptic north
+    const StrataCamera camera = strata::cameraLookAt(zero, target, up, f(cam.fovYDeg),
+                                                     static_cast<float>(width) / static_cast<float>(height),
+                                                     f(nearPlane), f(farPlane));
+    engine_.setCamera(camera);
+
+    StrataLighting lighting = strata::lightingDefaults(STRATA_LIGHTING_SPACE);
+    lighting.legacy_ambient = 0.05f;
+    engine_.setLighting(lighting);
+    StrataPointLight sunLight{};
+    setVec(sunLight.position, drawn_[0] - origin);
+    sunLight.range = 1e13f;  // far beyond everything: intensity is the same at Mercury and in the Kuiper belt
+    sunLight.color[0] = 1.0f;
+    sunLight.color[1] = 0.96f;
+    sunLight.color[2] = 0.9f;
+    sunLight.intensity = 1.25f;
+    engine_.setPointLights(&sunLight, 1);
+
+    // Which planet system the camera is in: its moons get orbits and labels.
+    int system = cam.freeFly ? -1 : cam.focus;
+    if (system > 0 && bodies[static_cast<size_t>(system)].kind == BodyKind::Moon) system = bodies[static_cast<size_t>(system)].parent;
+
+    // ---- bodies
+    for (size_t i = 0; i < bodies.size(); ++i) {
+        const Body& b = bodies[i];
+        if (!state.valid[i]) continue;
+        const Vec3 rel = drawn_[i] - origin;
+        if (i == 0) {
+            StrataPoint disc{}, glow{};
+            setVec(disc.position, rel);
+            disc.size_pixels = 6;
+            disc.world_diameter = f(2 * drawnRadius_[i]);
+            disc.color[0] = 1.0f;
+            disc.color[1] = 0.93f;
+            disc.color[2] = 0.75f;
+            disc.color[3] = 1.0f;
+            glow = disc;
+            glow.size_pixels = 46;
+            glow.world_diameter = f(7 * drawnRadius_[i]);
+            glow.color[0] = 1.0f;
+            glow.color[1] = 0.7f;
+            glow.color[2] = 0.3f;
+            glow.color[3] = 0.55f;
+            glow.flags = STRATA_POINT_SOFT;
+            points_.push_back(disc);
+            points_.push_back(glow);
+            continue;
+        }
+        if (drawnRadius_[i] > 0) {
+            StrataRenderItem item{};
+            item.kind = STRATA_PRIMITIVE_SPHERE;
+            setVec(item.position, rel);
+            const float d = f(2 * drawnRadius_[i]);
+            item.scale[0] = item.scale[1] = item.scale[2] = d;
+            std::memcpy(item.color, b.color, sizeof b.color);
+            item.color[3] = 1;
+            items_.push_back(item);
+        }
+        StrataPoint marker{};
+        setVec(marker.position, rel);
+        switch (b.kind) {
+            case BodyKind::Planet: marker.size_pixels = 5; break;
+            case BodyKind::Dwarf: marker.size_pixels = 4; break;
+            case BodyKind::Moon: marker.size_pixels = b.parent == system ? 3.5f : 2.5f; break;
+            default: marker.size_pixels = 4; break;
+        }
+        std::memcpy(marker.color, b.color, sizeof b.color);
+        marker.color[3] = state.extrapolated[i] ? 0.5f : 1.0f;
+        points_.push_back(marker);
+        if (view.axes && b.hasPole && drawnRadius_[i] > 0) {
+            Vec3 pole;
+            sys_.pole(static_cast<int>(i), state.jdTdb, pole);
+            const float axis[4] = {0.9f, 0.4f, 0.4f, 0.9f};
+            addLine(drawn_[i] - pole * (1.6 * drawnRadius_[i]), drawn_[i] + pole * (1.6 * drawnRadius_[i]), axis, origin);
+        }
+    }
+
+    // ---- small bodies
+    if (view.smallBodies) {
+        const auto& sbs = sys_.smallBodies();
+        for (size_t k = 0; k < drawnSmall_.size(); ++k) {
+            const SmallBodyGroup& g = sys_.groups()[static_cast<size_t>(sbs[k].group)];
+            StrataPoint p{};
+            setVec(p.position, drawnSmall_[k] - origin);
+            p.size_pixels = 2.0f;
+            std::memcpy(p.color, g.color, sizeof g.color);
+            p.color[3] = 0.75f;
+            points_.push_back(p);
+        }
+    }
+
+    // ---- orbits, trajectories, rings
+    if (view.orbits) {
+        for (size_t i = 1; i < bodies.size(); ++i) {
+            const Body& b = bodies[i];
+            const bool show = b.kind == BodyKind::Planet || b.kind == BodyKind::Dwarf || b.kind == BodyKind::Comet ||
+                              (b.kind == BodyKind::Moon && b.parent == system);
+            if (show) drawOrbit(static_cast<int>(i), state, view.scale, origin);
+            if (b.kind == BodyKind::Spacecraft && !b.trajectory.empty()) {
+                const float color[4] = {0.95f, 0.9f, 0.4f, 0.5f};
+                Vec3 previous;
+                bool have = false;
+                for (size_t k = 0; k < b.trajectory.size(); k += 3) {
+                    if (b.trajectory[k].jd > state.jdTdb) break;
+                    const Vec3 p = view.scale.heliocentric(state.positions[0] + b.trajectory[k].position,
+                                                           state.positions[0], drawn_[0]);
+                    if (have) addLine(previous, p, color, origin);
+                    previous = p;
+                    have = true;
+                }
+                if (have && state.valid[i]) addLine(previous, drawn_[i], color, origin);
+            }
+        }
+    }
+    for (size_t i = 1; i < bodies.size(); ++i) {
+        if (bodies[i].kind == BodyKind::Planet) addRings(static_cast<int>(i), state, view.scale, origin);
+    }
+    engine_.clearMeshes();
+    if (!meshIndices_.empty()) {
+        StrataMesh mesh{};
+        mesh.positions = meshPositions_.data();
+        mesh.normals = meshNormals_.data();
+        mesh.colors = meshColors_.data();
+        mesh.indices = meshIndices_.data();
+        mesh.vertex_count = static_cast<int32_t>(meshPositions_.size() / 3);
+        mesh.index_count = static_cast<int32_t>(meshIndices_.size());
+        mesh.color[3] = 1;
+        engine_.addMesh(mesh);
+    }
+
+    // ---- labels
+    if (view.labels) {
+        const float* v = camera.view;
+        const float* pr = camera.projection;
+        struct Rect {
+            float x0, y0, x1, y1;
+        };
+        std::vector<Rect> taken;
+        if (view.hud) {  // keep labels off the HUD text
+            const float k = width >= 1000 ? 1.0f : 0.55f;
+            taken.push_back({0, 0, width >= 1000 ? 880.0f : 380.0f, 128 * k});
+            taken.push_back({0, static_cast<float>(height) - 70 * k, 560 * k, static_cast<float>(height)});
+        }
+        // Close to a body, things far behind it are not labelled (they would
+        // sit next to it on screen and read as its neighbours).
+        const double labelRange = cam.freeFly || cam.focus == 0 ? 1e300 : 25.0 * cam.distance;
+        auto tryLabel = [&](size_t i, float size) {
+            const Vec3 rel = drawn_[i] - origin;
+            if (length(rel) > labelRange && i != 0) return;
+            float clip[4] = {0, 0, 0, 0};
+            const float in[4] = {f(rel.x), f(rel.y), f(rel.z), 1};
+            float eyeSpace[4] = {0, 0, 0, 0};
+            for (int r = 0; r < 4; ++r)
+                for (int c = 0; c < 4; ++c) eyeSpace[r] += v[c * 4 + r] * in[c];
+            for (int r = 0; r < 4; ++r)
+                for (int c = 0; c < 4; ++c) clip[r] += pr[c * 4 + r] * eyeSpace[c];
+            if (clip[3] <= 0) return;
+            const float sx = (clip[0] / clip[3] * 0.5f + 0.5f) * static_cast<float>(width);
+            const float sy = (0.5f - clip[1] / clip[3] * 0.5f) * static_cast<float>(height);
+            const float radiusPx = f(drawnRadius_[i] * pr[5] * 0.5 * height / clip[3]);
+            const std::string& name = bodies[i].name;
+            const float x = sx + std::max(radiusPx, 3.0f) + 5, y = sy - size / 2;
+            const Rect r{x - 2, y - 2, x + size * static_cast<float>(name.size()) + 2, y + size + 2};
+            if (r.x0 < 0 || r.x1 > static_cast<float>(width) || r.y0 < 0 || r.y1 > static_cast<float>(height)) return;
+            for (const Rect& t : taken) {
+                if (r.x0 < t.x1 && r.x1 > t.x0 && r.y0 < t.y1 && r.y1 > t.y0) return;
+            }
+            taken.push_back(r);
+            text(x, y, size, bodies[i].kind == BodyKind::Moon ? kDim : kWhite, name);
+            ++report.labels;
+        };
+        // Priority order: the Sun, planets, dwarf planets, the focused system's
+        // moons, then comets and spacecraft.
+        const BodyKind order[] = {BodyKind::Star, BodyKind::Planet, BodyKind::Dwarf, BodyKind::Moon,
+                                  BodyKind::Comet, BodyKind::Spacecraft};
+        for (BodyKind kind : order) {
+            for (size_t i = 0; i < bodies.size(); ++i) {
+                if (bodies[i].kind != kind || !state.valid[i]) continue;
+                if (kind == BodyKind::Moon && bodies[i].parent != system && static_cast<int>(i) != cam.focus &&
+                    bodies[i].naif != 301)
+                    continue;
+                tryLabel(i, kind == BodyKind::Moon ? 8.0f : 16.0f);
+            }
+        }
+    }
+    if (view.hud) hud(state, cam, view, width, height);
+
+    // ---- submit
+    StrataFrameDesc frame{};
+    frame.clear_flags = STRATA_CLEAR_COLOR | STRATA_CLEAR_DEPTH;
+    frame.clear_color[0] = 0.004f;
+    frame.clear_color[1] = 0.005f;
+    frame.clear_color[2] = 0.012f;
+    frame.clear_color[3] = 1;
+    engine_.beginFrame(frame);
+    engine_.submitPrimitives(items_.data(), items_.size());
+    engine_.submitLines(lines_.data(), lines_.size());
+    engine_.submitPoints(points_.data(), points_.size());
+    engine_.submitText(texts_.data(), texts_.size());
+    engine_.endFrame();
+    report.spheres = static_cast<int>(items_.size());
+    report.points = static_cast<int>(points_.size());
+    report.lineVertices = static_cast<int>(lines_.size());
+    return report;
+}
+
+void Renderer::hud(const SystemState& state, const CameraState& cam, const ViewOptions& view, int width, int height) {
+    const auto& bodies = sys_.bodies();
+    float y = 10;
+    const float big = width >= 1000 ? 16.0f : 8.0f, small = 8;
+    text(10, y, big, kWhite, view.timeLine);
+    y += big + 6;
+    char buf[256];
+    if (view.scale.mode == ScaleMode::True) {
+        std::snprintf(buf, sizeof buf, "TRUE DISTANCES  |  bodies enlarged x%g, Sun x%g", view.scale.enlarge,
+                      std::min(view.scale.enlarge, kSunEnlargeCap));
+        text(10, y, big, kWhite, buf);
+    } else {
+        text(10, y, big, kWarn, "COMPRESSED (LOG) DISTANCES AND SIZES  |  NOT TO SCALE");
+    }
+    y += big + 8;
+
+    if (!cam.freeFly) {
+        const size_t i = static_cast<size_t>(cam.focus);
+        const Body& b = bodies[i];
+        std::snprintf(buf, sizeof buf, "%s  (%s)", b.name.c_str(), kindName(b.kind));
+        text(10, y, big, kWhite, buf);
+        y += big + 4;
+        std::string line;
+        if (b.radiusKm > 0) line += "radius " + thousands(b.radiusKm) + " km";
+        if (b.rotationPeriodHours > 0) {
+            const double h = b.rotationPeriodHours;
+            std::snprintf(buf, sizeof buf, "   rotation %.2f %s%s", h > 72 ? h / 24 : h, h > 72 ? "d" : "h",
+                          b.pmRate < 0 ? " (retrograde)" : "");
+            line += buf;
+        }
+        Vec3 pole;
+        Elements el;
+        if (b.kind != BodyKind::Moon && sys_.pole(static_cast<int>(i), state.jdTdb, pole) &&
+            sys_.osculating(static_cast<int>(i), state.jdTdb, state, el)) {
+            const double si = std::sin(el.i * kDegToRad), ci = std::cos(el.i * kDegToRad);
+            const double O = el.node * kDegToRad;
+            const Vec3 normal{si * std::sin(O), -si * std::cos(O), ci};
+            std::snprintf(buf, sizeof buf, "   axial tilt %.1f deg", std::acos(std::clamp(dot(pole, normal), -1.0, 1.0)) / kDegToRad);
+            line += buf;
+        }
+        if (!line.empty()) {
+            text(10, y, small, kDim, line);
+            y += small + 4;
+        }
+        if (i != 0) {
+            const double fromSun = length(state.positions[i] - state.positions[0]) / kAuKm;
+            std::snprintf(buf, sizeof buf, "%.4f au from the Sun", fromSun);
+            line = buf;
+            if (b.parent > 0) {
+                const double fromParent = length(state.positions[i] - state.positions[static_cast<size_t>(b.parent)]);
+                line += "   " + thousands(fromParent) + " km from " + bodies[static_cast<size_t>(b.parent)].name;
+            }
+            text(10, y, small, kDim, line);
+            y += small + 4;
+        }
+        const char* src = b.source == BodySource::Spk ? "position: JPL DE440s"
+                          : b.source == BodySource::Table ? "position: JPL Horizons osculating elements, interpolated"
+                                                          : "position: JPL Horizons trajectory";
+        text(10, y, small, kDim, src);
+        y += small + 4;
+        if (state.extrapolated[i]) {
+            text(10, y, small, kWarn, "outside this body's element table: extrapolated two-body");
+            y += small + 4;
+        }
+        if (!state.valid[i]) {
+            text(10, y, small, kWarn, "no trajectory data at this date");
+            y += small + 4;
+        }
+    } else {
+        text(10, y, big, kWhite, "free flight");
+        y += big + 4;
+    }
+    if (view.smallBodies) {
+        std::snprintf(buf, sizeof buf, "%zu small bodies (SBDB elements, two-body)", sys_.smallBodies().size());
+        text(10, y, small, kDim, buf);
+    }
+    if (!view.prompt.empty()) text(10, static_cast<float>(height) - 60, big, kWarn, view.prompt);
+    text(10, static_cast<float>(height) - 14 - small, small, kDim, "H help   Tab next body   M scale mode   Space pause");
+
+    if (view.help) {
+        static const char* lines[] = {
+            "Space        play / pause",
+            ", .          slower / faster (negative runs backwards)",
+            "N            now, at real time        J  jump to a date",
+            "Tab, S-Tab   next / previous body     0-9  Sun, planets, Pluto",
+            "Home         the Sun",
+            "Left drag    orbit the focus          Wheel, PgUp/PgDn  zoom",
+            "F            free flight: WASD move, Q/E down/up, drag to look",
+            "M            TRUE / COMPRESSED scale",
+            "[ ]          body enlargement (TRUE mode)",
+            "O  L  B  X   orbits, labels, small bodies, spin axes",
+            "P            screenshot         U  export USD layer",
+            "Esc          quit",
+        };
+        float hy = static_cast<float>(height) / 2 - 120;
+        const float hx = static_cast<float>(width) / 2 - 300;
+        for (const char* l : lines) {
+            text(hx, hy, big, kWhite, l);
+            hy += big + 6;
+        }
+    }
+}
+
+}  // namespace orrery

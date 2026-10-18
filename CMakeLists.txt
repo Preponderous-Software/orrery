@@ -1,0 +1,81 @@
+cmake_minimum_required(VERSION 3.16)
+project(orrery VERSION 0.1.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+option(ORRERY_BUILD_TESTS "Build the tests" ON)
+option(ORRERY_WITH_STRATA "Build the renderer app on the Strata engine" ON)
+option(ORRERY_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+
+# The Strata commit the app is built against (strata.ref). Pinned; bump deliberately.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/strata.ref" ORRERY_STRATA_REF_DEFAULT)
+string(STRIP "${ORRERY_STRATA_REF_DEFAULT}" ORRERY_STRATA_REF_DEFAULT)
+set(ORRERY_STRATA_REF "${ORRERY_STRATA_REF_DEFAULT}" CACHE STRING "Strata git ref (a full commit SHA)")
+
+function(orrery_warnings target)
+  if(MSVC)
+    target_compile_options(${target} PRIVATE /W4)
+  else()
+    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+    if(ORRERY_WARNINGS_AS_ERRORS)
+      target_compile_options(${target} PRIVATE -Werror)
+    endif()
+  endif()
+endfunction()
+
+# Ephemerides, orbits, the catalogue and the view maths: no GPU, no Strata.
+add_library(orrery_core STATIC
+  src/orrery/csv.cpp
+  src/orrery/time.cpp
+  src/orrery/spk.cpp
+  src/orrery/kepler.cpp
+  src/orrery/element_table.cpp
+  src/orrery/system.cpp
+  src/orrery/scale.cpp)
+target_include_directories(orrery_core PUBLIC src)
+orrery_warnings(orrery_core)
+
+if(ORRERY_BUILD_TESTS)
+  enable_testing()
+  foreach(t time kepler scale)
+    add_executable(test_${t} tests/test_${t}.cpp)
+    target_link_libraries(test_${t} PRIVATE orrery_core)
+    orrery_warnings(test_${t})
+    add_test(NAME ${t} COMMAND test_${t})
+  endforeach()
+  # Needs data/kernels/de440s.bsp (tools/fetch_data.py kernels).
+  add_executable(test_ephemeris tests/test_ephemeris.cpp)
+  target_link_libraries(test_ephemeris PRIVATE orrery_core)
+  target_compile_definitions(test_ephemeris PRIVATE ORRERY_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+  orrery_warnings(test_ephemeris)
+  add_test(NAME ephemeris COMMAND test_ephemeris)
+endif()
+
+if(ORRERY_WITH_STRATA)
+  cmake_minimum_required(VERSION 3.24)
+  include(FetchContent)
+  set(STRATA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(STRATA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+  FetchContent_Declare(strata
+    GIT_REPOSITORY https://github.com/Preponderous-Software/strata.git
+    GIT_TAG ${ORRERY_STRATA_REF})
+  FetchContent_MakeAvailable(strata)
+
+  add_executable(orrery app/main.cpp app/renderer.cpp app/usda.cpp)
+  target_include_directories(orrery PRIVATE app)
+  target_link_libraries(orrery PRIVATE orrery_core strata::static)
+  target_compile_definitions(orrery PRIVATE ORRERY_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+  orrery_warnings(orrery)
+
+  if(ORRERY_BUILD_TESTS)
+    # Headless render smoke test: renders three views and checks the frames
+    # are not blank. Needs a GL 4.5 context (llvmpipe is fine).
+    add_test(NAME render_smoke COMMAND orrery --data "${CMAKE_CURRENT_SOURCE_DIR}/data" --smoke-test
+             "${CMAKE_CURRENT_BINARY_DIR}/smoke")
+  endif()
+endif()
