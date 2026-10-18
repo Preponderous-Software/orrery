@@ -25,6 +25,8 @@ can be seen. Each frame is 8 days. It was rendered headless by the real app:
 | ![Saturn at true scale with its D, C, B, A and F rings, the Cassini Division and nearby moons, 1 March 2032, with the rings sunlit](docs/media/saturn_true.png) | ![Jupiter at true scale with Io, Europa, Ganymede and Callisto on their orbits, 18 October 2026](docs/media/jupiter_true.png) |
 | **Pluto and Charon** (true scale, ×1) | **Everything, COMPRESSED (log) distances: NOT TO SCALE** |
 | ![Pluto and Charon at true scale, 18 October 2026](docs/media/pluto_charon_true.png) | ![The whole solar system with distances compressed logarithmically: planets, dwarf planets, comets, spacecraft, the asteroid belt, trojans and the Kuiper belt](docs/media/overview_compressed.png) |
+| **Earth at 12:00 UTC, 18 October 2026** (true scale, ×1) | **Earth through 21 December 2026, an hour a frame** |
+| ![Earth at true scale, lit from the left by the Sun: Africa, Europe and Arabia on the day side, the terminator over India, the axis tilted 23.4 degrees](docs/media/earth_true.png) | ![Earth turning once about its tilted axis over one day: Australia and the Pacific, then Asia, Africa and the Americas pass by](docs/media/earth_day.gif) |
 
 ## Scale: what you are looking at
 
@@ -137,6 +139,7 @@ The text at the top left shows the following:
 Further details:
 
 - **Radii, poles and rotation periods** are the IAU WGCCRE 2015 values from NAIF's `pck00011.tpc`. Bodies are drawn as equal-volume spheres. The radii of Eris, Haumea and Makemake come from stellar-occultation papers.
+- **Surfaces and rotation:** the Sun, the eight planets and the Moon carry planet maps (Solar System Scope, CC BY 4.0; artistic composites based on NASA data, see [DATA_SOURCES.md](DATA_SOURCES.md#planet-maps)). Each map turns about the body's IAU pole at its IAU sidereal rate, so axial tilt and the time of day on Earth are real. Every other body is a plain hand-picked tint.
 - **Orbits** are drawn as the current osculating ellipse of each planet, dwarf planet and comet. The focused planet's moons get their ellipses too.
 - **Lighting:** the Sun is the only light, a point light at its position. Night sides are dark except for a faint ambient term.
 - **Interpolating element tables:** between two samples, *a*, *e* and *i* are linear, the node and periapsis follow the shorter arc, and the mean longitude is unwrapped by the revolution count the first sample's mean motion predicts. Positions are therefore exact at every sample and follow the real mean motion in between. A single osculating set would drift by tens of degrees a month for Phobos.
@@ -187,7 +190,12 @@ Four generic features were added to Strata for this project in
 - screen-space **text** in a public-domain 8×8 font (labels and HUD).
 - a **space lighting** mode lit only by point lights.
 
-The rings use Strata's static meshes (ABI 1.4).
+The rings use Strata's static meshes (ABI 1.4). The planet maps use Strata's
+textures and per-mesh model matrices
+([Strata #16](https://github.com/Preponderous-Software/strata/pull/16), ABI 1.7):
+each mapped body is one textured sphere mesh built once, and every frame only
+its model matrix changes (pole, prime meridian, drawn radius and position
+relative to the eye). The Sun's sphere is unlit.
 
 **Precision** is handled in the orrery, not in Strata:
 
@@ -211,11 +219,11 @@ it directly; CI checks it with OpenUSD (`usd-core`).
 
 ## Known gaps
 
-- **No textures.**
-  - Strata has no texture path yet, so bodies are plain colours.
-  - The colours are hand-picked tints, not measured data.
-  - No rotation is visible, although rotation periods and poles are known and shown in the HUD; `X` draws spin axes.
-- **Spheres only.** Bodies are equal-volume spheres. Jupiter's and Saturn's oblateness and Haumea's elongated shape are not drawn, because Strata's primitives scale along the world axes and cannot be tilted to a pole.
+- **Maps for ten bodies only.**
+  - The Sun, the planets and the Moon have maps. These are artistic composites, not measured imagery (see [DATA_SOURCES.md](DATA_SOURCES.md#planet-maps)).
+  - Other moons, the dwarf planets, comets and spacecraft are hand-picked tints, not measured data, and they do not visibly rotate.
+  - Rotation uses the secular IAU terms only (no nutation or libration series), and gas-giant maps turn with System III rather than with their clouds.
+- **Spheres only.** Bodies are equal-volume spheres. Jupiter's and Saturn's oblateness and Haumea's elongated shape are not drawn. Strata's mesh transforms could now flatten a sphere along its pole; that has not been done.
 - **Missing moons.** Moons of dwarf planets other than Charon (Dysnomia, Hiʻiaka, Namaka, MK2) are not included: Horizons has no ephemeris for them. Moons smaller than 100 km (Amalthea, Janus, Larissa and many more) are left out by the size cutoff.
 - **Limited time ranges.**
   - The time range is DE440s's coverage, 1849-12-26 to 2150-01-22.
@@ -230,4 +238,6 @@ it directly; CI checks it with OpenUSD (`usd-core`).
 ## Licence
 
 MIT; see [LICENSE](LICENSE). The data is not the code's: see
-[DATA_SOURCES.md](DATA_SOURCES.md) for its terms.
+[DATA_SOURCES.md](DATA_SOURCES.md) for its terms. The planet maps in
+`data/textures/` are © Solar System Scope (www.solarsystemscope.com), CC BY
+4.0; `third_party/stb/stb_image.h` is public domain.

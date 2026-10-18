@@ -40,7 +40,11 @@ struct FrameReport {
 
 class Renderer {
 public:
-    Renderer(strata::Engine& engine, const SolarSystem& system);
+    // textureDir holds the planet maps (data/textures, DATA_SOURCES.md); a
+    // missing map, or a Strata older than ABI 1.7, leaves that body a plain
+    // coloured sphere.
+    Renderer(strata::Engine& engine, const SolarSystem& system, const std::string& textureDir);
+    int texturedBodies() const;
 
     // Drawn position of every body and small body for the current state.
     void layout(const SystemState& state, const Scale& scale);
@@ -59,6 +63,8 @@ private:
     void drawOrbit(int body, const SystemState& state, const Scale& scale, const Vec3& origin);
     void addLine(const Vec3& a, const Vec3& b, const float color[4], const Vec3& origin);
     void addRings(int planet, const SystemState& state, const Scale& scale, const Vec3& origin);
+    // Places (or hides) a textured body's sphere; false when the body has none.
+    bool placeTextured(size_t body, const SystemState& state, const Vec3& origin);
     void text(float x, float y, float size, const float color[4], const std::string& s);
     void hud(const SystemState& state, const CameraState& cam, const ViewOptions& view, int width, int height);
 
@@ -75,6 +81,18 @@ private:
     std::deque<std::string> textStorage_;  // deque: c_str() stays valid as it grows
     std::vector<float> meshPositions_, meshNormals_, meshColors_;
     std::vector<uint32_t> meshIndices_;
+    uint32_t ringMesh_ = 0;  // this frame's ring mesh, replaced every frame
+
+    // Textured spheres (ABI 1.7): one mesh per mapped body, built once around
+    // the origin in the body's own frame and turned by a model matrix each frame.
+    struct TexturedBody {
+        uint32_t texture = 0;
+        uint32_t mesh = 0;  // 0 while hidden
+        bool unlit = false;
+    };
+    std::vector<TexturedBody> textured_;  // indexed like sys_.bodies(); texture 0 = none
+    std::vector<float> spherePositions_, sphereUvs_;
+    std::vector<uint32_t> sphereIndices_;
 };
 
 }  // namespace orrery

@@ -1,15 +1,15 @@
 # Data sources
 
 Every number the orrery draws comes from one of the sources below. Nothing is
-estimated or invented, with two exceptions that are stated wherever they appear:
+estimated or invented, with three exceptions that are stated wherever they appear:
 
 - the display colours of bodies, rings and small-body groups are hand-picked
   tints. They are not measured data.
 - three dwarf-planet radii come from the published papers cited below, because
   the NAIF/IAU constants have no entry for them.
-
-There are no textures. Strata has no texture path yet, so every body is a
-plain-coloured sphere.
+- the planet maps (see *Planet maps*) are artistic composites. Their maker
+  fills unmapped areas with plausible terrain and saturates the colours, so
+  they show what each body roughly looks like, not measured data.
 
 ## How the data gets here
 
@@ -153,6 +153,42 @@ The rings are drawn as flat annuli in the planet's equatorial plane, which comes
 - **Sources:** NASA NSSDCA *Saturnian Rings Fact Sheet* and *Uranian Rings Fact Sheet* (<https://nssdc.gsfc.nasa.gov/planetary/factsheet/>). These are NASA works and are not subject to copyright in the United States.
 - The gap between B and A is the Cassini Division.
 - Opacity and colour are display choices.
+
+## Planet maps
+
+The Sun, Mercury, Venus, Earth, the Moon, Mars, Jupiter, Saturn, Uranus and
+Neptune are drawn with the maps in [`data/textures/`](data/textures/). Every
+other body is a plain-coloured sphere. None of these maps comes from the JPL
+APIs, and they are committed because they are small (1.9 MB in all).
+
+- **Source:** Solar System Scope, *Solar Textures* (INOVE), <https://www.solarsystemscope.com/textures/>, the "2K" files downloaded 2026-10-18.
+- **Licence:** [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/) (CC BY 4.0). Attribution: *Textures © Solar System Scope (www.solarsystemscope.com), CC BY 4.0.* The maps are licensed separately from the orrery's MIT code.
+- **Their provenance:** by Solar System Scope's description, they are based on NASA elevation and imagery data (the Earth map largely on NASA's Blue Marble). Unmapped areas are filled with fictional terrain that matches the rest, and the colours are slightly more saturated than true.
+- **Changes made here:** each file was decoded and re-encoded as a baseline JPEG at quality 85 with its metadata stripped. The Sun, Mercury, Venus, Uranus and Neptune maps were also downsampled from 2048 × 1024 to 1024 × 512 (Lanczos). No other changes were made.
+- **Projection:** equirectangular, with planetocentric longitude 0 at the centre, east to the right and north at the top. The orrery maps it onto a 96 × 48 latitude-longitude sphere in the body's own frame.
+
+| File | Body | Size | Original file |
+|---|---|---|---|
+| `sun.jpg` | Sun | 1024 × 512 | `2k_sun.jpg` |
+| `mercury.jpg` | Mercury | 1024 × 512 | `2k_mercury.jpg` |
+| `venus_atmosphere.jpg` | Venus (cloud tops) | 1024 × 512 | `2k_venus_atmosphere.jpg` |
+| `earth_daymap.jpg` | Earth | 2048 × 1024 | `2k_earth_daymap.jpg` |
+| `moon.jpg` | Moon | 2048 × 1024 | `2k_moon.jpg` |
+| `mars.jpg` | Mars | 2048 × 1024 | `2k_mars.jpg` |
+| `jupiter.jpg` | Jupiter | 2048 × 1024 | `2k_jupiter.jpg` |
+| `saturn.jpg` | Saturn | 2048 × 1024 | `2k_saturn.jpg` |
+| `uranus.jpg` | Uranus | 1024 × 512 | `2k_uranus.jpg` |
+| `neptune.jpg` | Neptune | 1024 × 512 | `2k_neptune.jpg` |
+
+**Orientation:** each map turns with its body. The pole and the prime meridian
+come from the IAU elements in `pck00011.tpc` (above): the pole's right
+ascension and declination, and W = W0 + Ẇ·d, with secular terms only. Each body
+therefore shows its real axial tilt and sidereal rotation. A gas giant's map
+is a cloud pattern, and its "longitude" is only the IAU System III frame,
+because its clouds drift. The Sun's map is drawn unlit.
+
+The maps are decoded by `stb_image` v2.30 (public domain), vendored in
+[`third_party/stb/`](third_party/stb/README.md).
 
 ## Constants
 
