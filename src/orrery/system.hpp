@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "orrery/element_table.hpp"
+#include "orrery/rotation.hpp"
 #include "orrery/spk.hpp"
 #include "orrery/vec.hpp"
 
@@ -99,6 +100,9 @@ public:
 
     // The body's north pole (unit vector, ecliptic J2000) at jdTdb, or false.
     bool pole(int body, double jdTdb, Vec3& out) const;
+    // The body's orientation (pole and prime meridian, ecliptic J2000) at
+    // jdTdb from its IAU elements (secular terms only), or false.
+    bool frame(int body, double jdTdb, BodyFrame& out) const;
 
 private:
     Vec3 spkPosition(int target, double jdTdb) const;  // ecliptic, SSB-relative

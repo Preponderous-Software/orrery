@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "orrery/time.hpp"
+#include "image_file.hpp"
 
 namespace orrery {
 namespace {
@@ -44,7 +45,111 @@ constexpr float kWarn[4] = {1.0f, 0.75f, 0.35f, 1};
 
 }  // namespace
 
-Renderer::Renderer(strata::Engine& engine, const SolarSystem& system) : engine_(engine), sys_(system) {}
+// Planet maps by NAIF id: equirectangular, 0 degrees longitude in the
+// centre, east to the right, north at the top. Sources and licences are in
+// DATA_SOURCES.md ("Planet maps").
+struct MapFile {
+    long naif;
+    const char* file;
+};
+constexpr MapFile kMaps[] = {
+    {10, "sun.jpg"},       {199, "mercury.jpg"}, {299, "venus_atmosphere.jpg"}, {399, "earth_daymap.jpg"},
+    {301, "moon.jpg"},     {499, "mars.jpg"},    {599, "jupiter.jpg"},          {699, "saturn.jpg"},
+    {799, "uranus.jpg"},   {899, "neptune.jpg"},
+};
+
+Renderer::Renderer(strata::Engine& engine, const SolarSystem& system, const std::string& textureDir)
+    : engine_(engine), sys_(system) {
+    const auto& bodies = sys_.bodies();
+    textured_.assign(bodies.size(), TexturedBody{});
+    if (strata_abi_minor() < 7) {
+        std::fprintf(stderr, "orrery: Strata %s has no textures (ABI 1.7); planets are plain spheres\n",
+                     strata_version_string());
+        return;
+    }
+    // A unit latitude-longitude sphere in body coordinates: +Z north, +X the
+    // prime meridian, east longitude counter-clockwise about +Z. The seam's
+    // column is duplicated at u = 0 and u = 1.
+    const int slices = 96, stacks = 48;
+    for (int j = 0; j <= stacks; ++j) {
+        const double v = static_cast<double>(j) / stacks;
+        const double lat = (0.5 - v) * kPi;
+        for (int i = 0; i <= slices; ++i) {
+            const double u = static_cast<double>(i) / slices;
+            const double lon = (u - 0.5) * 2 * kPi;  // the map's centre is longitude 0
+            spherePositions_.insert(spherePositions_.end(), {f(std::cos(lat) * std::cos(lon)),
+                                                             f(std::cos(lat) * std::sin(lon)), f(std::sin(lat))});
+            sphereUvs_.insert(sphereUvs_.end(), {f(u), f(v)});
+        }
+    }
+    const auto row = static_cast<uint32_t>(slices + 1);
+    for (uint32_t j = 0; j < static_cast<uint32_t>(stacks); ++j) {
+        for (uint32_t i = 0; i < static_cast<uint32_t>(slices); ++i) {
+            const uint32_t a = j * row + i, b = a + 1, c = a + row, d = c + 1;
+            sphereIndices_.insert(sphereIndices_.end(), {a, c, b, b, c, d});  // counter-clockwise from outside
+        }
+    }
+    for (const MapFile& map : kMaps) {
+        int body = -1;
+        for (size_t i = 0; i < bodies.size(); ++i) {
+            if (bodies[i].naif == map.naif) body = static_cast<int>(i);
+        }
+        if (body < 0) continue;
+        const std::string path = textureDir + "/" + map.file;
+        int w = 0, h = 0;
+        std::vector<uint8_t> rgba;
+        std::string error;
+        if (!loadRgba8(path, rgba, w, h, &error)) {
+            std::fprintf(stderr, "orrery: cannot read %s (%s); %s stays a plain sphere\n", path.c_str(),
+                         error.c_str(), bodies[static_cast<size_t>(body)].name.c_str());
+            continue;
+        }
+        TexturedBody& t = textured_[static_cast<size_t>(body)];
+        t.texture = engine_.createTextureRgba8(w, h, rgba.data(), STRATA_TEXTURE_MIPMAPS | STRATA_TEXTURE_CLAMP_V);
+        t.unlit = map.naif == 10;  // the Sun shines; it is not lit
+    }
+}
+
+int Renderer::texturedBodies() const {
+    int n = 0;
+    for (const auto& t : textured_) n += t.texture != 0 ? 1 : 0;
+    return n;
+}
+
+bool Renderer::placeTextured(size_t i, const SystemState& state, const Vec3& origin) {
+    TexturedBody& t = textured_[i];
+    if (t.texture == 0) return false;
+    if (!state.valid[i] || drawnRadius_[i] <= 0) {
+        if (t.mesh != 0) engine_.removeMesh(t.mesh);
+        t.mesh = 0;
+        return true;
+    }
+    if (t.mesh == 0) {
+        StrataTexturedMesh m{};
+        m.mesh.positions = spherePositions_.data();
+        m.mesh.normals = spherePositions_.data();  // a unit sphere's normals are its positions
+        m.mesh.indices = sphereIndices_.data();
+        m.mesh.vertex_count = static_cast<int32_t>(spherePositions_.size() / 3);
+        m.mesh.index_count = static_cast<int32_t>(sphereIndices_.size());
+        m.mesh.color[0] = m.mesh.color[1] = m.mesh.color[2] = m.mesh.color[3] = 1.0f;
+        m.uvs = sphereUvs_.data();
+        m.texture = t.texture;
+        m.flags = t.unlit ? STRATA_MESH_UNLIT : 0u;
+        t.mesh = engine_.addTexturedMesh(m);
+    }
+    // Pole and prime meridian from the IAU elements (axial tilt and sidereal
+    // rotation); a body without them keeps the ecliptic axes.
+    BodyFrame frame;
+    sys_.frame(static_cast<int>(i), state.jdTdb, frame);
+    const double r = drawnRadius_[i];
+    const Vec3 c = drawn_[i] - origin;
+    const float model[16] = {f(frame.x.x * r), f(frame.x.y * r), f(frame.x.z * r), 0,
+                             f(frame.y.x * r), f(frame.y.y * r), f(frame.y.z * r), 0,
+                             f(frame.z.x * r), f(frame.z.y * r), f(frame.z.z * r), 0,
+                             f(c.x),           f(c.y),           f(c.z),           1};
+    engine_.setMeshTransform(t.mesh, model);
+    return true;
+}
 
 void Renderer::layout(const SystemState& state, const Scale& scale) {
     const auto& bodies = sys_.bodies();
@@ -241,8 +346,10 @@ FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, con
     // ---- bodies
     for (size_t i = 0; i < bodies.size(); ++i) {
         const Body& b = bodies[i];
+        const bool mapped = placeTextured(i, state, origin);
         if (!state.valid[i]) continue;
         const Vec3 rel = drawn_[i] - origin;
+        if (mapped && drawnRadius_[i] > 0) ++report.spheres;
         if (i == 0) {
             StrataPoint disc{}, glow{};
             setVec(disc.position, rel);
@@ -264,7 +371,7 @@ FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, con
             points_.push_back(glow);
             continue;
         }
-        if (drawnRadius_[i] > 0) {
+        if (drawnRadius_[i] > 0 && !mapped) {
             StrataRenderItem item{};
             item.kind = STRATA_PRIMITIVE_SPHERE;
             setVec(item.position, rel);
@@ -333,7 +440,8 @@ FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, con
     for (size_t i = 1; i < bodies.size(); ++i) {
         if (bodies[i].kind == BodyKind::Planet) addRings(static_cast<int>(i), state, view.scale, origin);
     }
-    engine_.clearMeshes();
+    if (ringMesh_ != 0) engine_.removeMesh(ringMesh_);
+    ringMesh_ = 0;
     if (!meshIndices_.empty()) {
         StrataMesh mesh{};
         mesh.positions = meshPositions_.data();
@@ -343,7 +451,7 @@ FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, con
         mesh.vertex_count = static_cast<int32_t>(meshPositions_.size() / 3);
         mesh.index_count = static_cast<int32_t>(meshIndices_.size());
         mesh.color[3] = 1;
-        engine_.addMesh(mesh);
+        ringMesh_ = engine_.addMesh(mesh);
     }
 
     // ---- labels
@@ -416,7 +524,7 @@ FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, con
     engine_.submitPoints(points_.data(), points_.size());
     engine_.submitText(texts_.data(), texts_.size());
     engine_.endFrame();
-    report.spheres = static_cast<int>(items_.size());
+    report.spheres += static_cast<int>(items_.size());
     report.points = static_cast<int>(points_.size());
     report.lineVertices = static_cast<int>(lines_.size());
     return report;

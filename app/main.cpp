@@ -223,7 +223,7 @@ int main(int argc, char** argv) {
         auto engine = strata::Engine::create(desc);
         std::printf("GPU: %s\n", engine->gpuDescription().c_str());
 
-        Renderer renderer(*engine, sys);
+        Renderer renderer(*engine, sys, args.data + "/textures");
         CameraState cam;
         ViewOptions view;
         view.scale.mode = args.mode;

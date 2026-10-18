@@ -42,7 +42,7 @@ orrery_warnings(orrery_core)
 
 if(ORRERY_BUILD_TESTS)
   enable_testing()
-  foreach(t time kepler scale)
+  foreach(t time kepler scale rotation)
     add_executable(test_${t} tests/test_${t}.cpp)
     target_link_libraries(test_${t} PRIVATE orrery_core)
     orrery_warnings(test_${t})
@@ -67,9 +67,14 @@ if(ORRERY_WITH_STRATA)
     GIT_TAG ${ORRERY_STRATA_REF})
   FetchContent_MakeAvailable(strata)
 
+  # stb_image decodes the planet maps (third_party/stb/README.md); its own
+  # translation unit, without the project's warning flags.
+  add_library(orrery_stb STATIC third_party/stb/image_file.cpp)
+  target_include_directories(orrery_stb SYSTEM PUBLIC third_party/stb)
+
   add_executable(orrery app/main.cpp app/renderer.cpp app/usda.cpp)
   target_include_directories(orrery PRIVATE app)
-  target_link_libraries(orrery PRIVATE orrery_core strata::static)
+  target_link_libraries(orrery PRIVATE orrery_core orrery_stb strata::static)
   target_compile_definitions(orrery PRIVATE ORRERY_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
   orrery_warnings(orrery)
 

@@ -297,4 +297,13 @@ bool SolarSystem::pole(int body, double jd, Vec3& out) const {
     return true;
 }
 
+bool SolarSystem::frame(int body, double jd, BodyFrame& out) const {
+    const Body& b = bodies_[static_cast<size_t>(body)];
+    if (!b.hasPole) return false;
+    const double d = jd - kJ2000;
+    const double T = d / kDaysPerJulianCentury;
+    out = bodyFrame(b.poleRa0 + b.poleRaRate * T, b.poleDec0 + b.poleDecRate * T, b.pmW0 + b.pmRate * d);
+    return true;
+}
+
 }  // namespace orrery

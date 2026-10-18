@@ -29,6 +29,8 @@ STILLS = {
                      "--pitch", "30", "--yaw", "-70", "--no-small-bodies"],
     "pluto_charon_true": ["--date", "2026-10-18", "--focus", "Pluto", "--enlarge", "1", "--distance-au", "0.00025",
                           "--pitch", "35", "--yaw", "-60", "--no-small-bodies"],
+    "earth_true": ["--date", "2026-10-18T12:00", "--focus", "Earth", "--enlarge", "1", "--distance-au", "0.00028",
+                   "--pitch", "15", "--yaw", "-70", "--no-small-bodies"],
     "kuiper_compressed": ["--date", "2026-10-18", "--focus", "Sun", "--mode", "compressed", "--distance-au", "30",
                           "--pitch", "70", "--yaw", "-90"],
 }
@@ -61,6 +63,19 @@ def main() -> int:
         frames = [im.quantize(palette=palette, dither=Image.Dither.NONE) for im in rgb]
         out = MEDIA / "hero.gif"
         frames[0].save(out, save_all=True, append_images=frames[1:], duration=110, loop=0, optimize=True)
+        print(f"wrote {out} ({out.stat().st_size / 1e6:.2f} MB, {len(frames)} frames)")
+
+    # Earth through one day, an hour per frame: the planet map turning about
+    # its tilted axis (IAU pole and prime meridian from pck00011.tpc).
+    with tempfile.TemporaryDirectory() as tmp:
+        run(binary, ["--date", "2026-12-21", "--focus", "Earth", "--enlarge", "1", "--distance-au", "0.0002",
+                     "--pitch", "10", "--yaw", "-90", "--no-small-bodies", "--no-orbits", "--no-labels", "--no-hud",
+                     "--frames", tmp, "--count", "24", "--step", str(1 / 24)], size=(480, 270))
+        rgb = [Image.open(p).convert("RGB") for p in sorted(Path(tmp).glob("frame_*.png"))]
+        palette = rgb[0].quantize(colors=96, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+        frames = [im.quantize(palette=palette, dither=Image.Dither.NONE) for im in rgb]
+        out = MEDIA / "earth_day.gif"
+        frames[0].save(out, save_all=True, append_images=frames[1:], duration=120, loop=0, optimize=True)
         print(f"wrote {out} ({out.stat().st_size / 1e6:.2f} MB, {len(frames)} frames)")
     return 0
 
