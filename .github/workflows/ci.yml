@@ -43,13 +43,28 @@ jobs:
           path: data/kernels
           key: naif-kernels-${{ hashFiles('data/kernels.sha256') }}
 
-      - name: Fetch NAIF kernels (SHA-256 checked)
-        run: uv run --python 3.12 tools/fetch_data.py kernels
+      # JPL data is fetched at build time, never committed (DATA_SOURCES.md).
+      # The cache key is the query manifest (every JPL request tools/bodies.py
+      # implies), so JPL is only asked again when a query changes or the
+      # cache expires, not on every run.
+      - name: Write the JPL query manifest
+        run: |
+          mkdir -p build
+          uv run --python 3.12 tools/fetch_data.py plan > build/jpl-query-plan.json
 
-      - name: Catalogue is reproducible from the committed raw data
+      - name: Cache JPL API responses
+        uses: actions/cache@v4
+        with:
+          path: data/raw
+          key: jpl-raw-${{ hashFiles('build/jpl-query-plan.json') }}
+
+      - name: Fetch data (NAIF kernels SHA-256 checked; JPL responses rate limited, cached, recorded in a manifest)
+        run: uv run --python 3.12 tools/fetch_data.py all
+
+      - name: Build the catalogue and test references from the fetched data
         run: |
           uv run --python 3.12 tools/build_catalog.py
-          git diff --exit-code --stat -- data/catalog tests/data
+          python3 -c "import json; m = json.load(open('data/catalog/manifest.json')); print('JPL data fetched', *m['fetched_utc_range'])"
 
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DORRERY_WARNINGS_AS_ERRORS=ON
@@ -64,6 +79,13 @@ jobs:
         run: |
           build/orrery --date 2026-10-18 --export-usda build/check.usda
           uv run --python 3.12 --with usd-core==25.8 tests/check_usda.py build/check.usda
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: data-manifest
+          path: data/catalog/manifest.json
+          if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
         if: always()

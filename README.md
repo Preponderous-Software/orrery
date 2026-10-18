@@ -51,8 +51,24 @@ development headers that SDL3 builds against (`libx11-dev libxext-dev
 libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev`). CMake
 fetches Strata at the commit in [`strata.ref`](strata.ref).
 
+The JPL data is not in the repository. On a fresh clone, download it from
+JPL and build the catalogue once before anything else. This needs
+[uv](https://docs.astral.sh/uv/) and the network; the scripts use only the
+Python standard library.
+
 ```sh
-uv run --python 3.12 tools/fetch_data.py kernels   # DE440s and two NAIF text kernels, SHA-256 checked (32 MB)
+uv run --python 3.12 tools/fetch_data.py all       # NAIF kernels (32 MB, SHA-256 checked) + ~66 JPL API requests, ~3 min
+uv run --python 3.12 tools/build_catalog.py        # data/catalog/ for the app, tests/data/ for the tests
+```
+
+The download is rate limited and cached in `data/raw/`, so running it again
+only fetches what is missing or whose query changed (`--refresh` fetches it
+all again). `data/catalog/manifest.json` records what each build was made
+from: every query, when it was fetched and the SHA-256 of each response.
+[DATA_SOURCES.md](DATA_SOURCES.md) explains the pipeline and credits the
+sources. Then build and run:
+
+```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j4
 ctest --test-dir build --output-on-failure
@@ -130,7 +146,9 @@ Every source, licence and citation is in [DATA_SOURCES.md](DATA_SOURCES.md).
 ## Accuracy
 
 `tests/test_ephemeris.cpp` compares the orrery with reference state vectors
-fetched from JPL Horizons. The values below are from the current build.
+fetched from JPL Horizons at build time. Every check has a fixed tolerance,
+so it holds for any later fetch, even as JPL updates its orbit solutions.
+The values below are from a build with data fetched on 2026-10-18.
 
 | Check | Epochs | Worst error | Tolerance |
 |---|---|---|---|

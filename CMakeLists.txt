@@ -48,7 +48,8 @@ if(ORRERY_BUILD_TESTS)
     orrery_warnings(test_${t})
     add_test(NAME ${t} COMMAND test_${t})
   endforeach()
-  # Needs data/kernels/de440s.bsp (tools/fetch_data.py kernels).
+  # Needs data/kernels/de440s.bsp and tests/data/vectors (tools/fetch_data.py all, then
+  # tools/build_catalog.py).
   add_executable(test_ephemeris tests/test_ephemeris.cpp)
   target_link_libraries(test_ephemeris PRIVATE orrery_core)
   target_compile_definitions(test_ephemeris PRIVATE ORRERY_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")

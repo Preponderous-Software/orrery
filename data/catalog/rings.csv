@@ -1,8 +1,0 @@
-# Ring radii from the NASA NSSDCA ring fact sheets (see DATA_SOURCES.md); colour and alpha are display choices.
-planet,name,inner_km,outer_km,r,g,b,alpha
-699,D ring,66900,74510,0.500,0.450,0.400,0.15
-699,C ring,74658,91975,0.620,0.560,0.480,0.35
-699,B ring,91975,117507,0.920,0.850,0.700,0.85
-699,A ring,122340,136780,0.820,0.760,0.640,0.6
-699,F ring,139801,139851,0.850,0.800,0.700,0.6
-799,epsilon ring,51119,51179,0.550,0.550,0.550,0.6

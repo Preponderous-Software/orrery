@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <fstream>
 #include <stdexcept>
 
 #include "orrery/csv.hpp"
@@ -49,6 +50,11 @@ const char* kindName(BodyKind kind) {
 SolarSystem::SolarSystem(const std::string& dataDir, const std::string& kernelPath) {
     spk_ = std::make_unique<SpkFile>(kernelPath.empty() ? dataDir + "/kernels/de440s.bsp" : kernelPath);
     const std::string catalog = dataDir + "/catalog/";
+    if (!std::ifstream(catalog + "bodies.csv")) {
+        // The catalogue is built from data fetched from JPL, never committed (DATA_SOURCES.md).
+        throw std::runtime_error("no catalogue in " + catalog +
+                                 ": run tools/fetch_data.py all, then tools/build_catalog.py (see README)");
+    }
 
     const CsvTable b = readCsv(catalog + "bodies.csv");
     for (const auto& row : b.rows) {

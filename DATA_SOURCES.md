@@ -13,22 +13,56 @@ plain-coloured sphere.
 
 ## How the data gets here
 
-| Step | Command | Output |
-|---|---|---|
-| Download | `uv run --python 3.12 tools/fetch_data.py all` | `data/kernels/` (git-ignored, SHA-256 checked against `data/kernels.sha256`); `data/raw/` (committed, gzipped API responses) |
-| Build the catalogue | `uv run --python 3.12 tools/build_catalog.py` | `data/catalog/` (read by the app) and `tests/data/vectors/` (accuracy references), both committed |
+None of the NASA/JPL data is committed to this repository. Whoever builds
+the orrery downloads it from JPL, and the app's catalogue is generated from
+that download:
 
-CI rebuilds the catalogue from the committed raw responses and fails if the
-result differs from what is committed (`git diff --exit-code`). The raw
-responses were fetched on 2026-10-18. A refetch (`--refresh`) gives newer orbit
-solutions, so it is a deliberate change.
+| Step | Command | Output (all git-ignored) |
+|---|---|---|
+| Download | `uv run --python 3.12 tools/fetch_data.py all` | `data/kernels/` (NAIF kernels, SHA-256 checked against `data/kernels.sha256`); `data/raw/` (JPL Horizons and SBDB API responses, gzipped, plus `data/raw/manifest.json`) |
+| Build the catalogue | `uv run --python 3.12 tools/build_catalog.py` | `data/catalog/` (read by the app, with `data/catalog/manifest.json`) and `tests/data/vectors/` (accuracy references) |
+
+What is committed is the list of queries: the bodies, spans, steps and SBDB
+filters in `tools/bodies.py`, and the kernel hashes in `data/kernels.sha256`.
+`uv run --python 3.12 tools/fetch_data.py plan` prints every JPL request the
+build makes, without touching the network.
+
+**Being polite to JPL.** `tools/fetch_data.py` sends one request at a time, at
+least two seconds apart, with a `User-Agent` naming this project. It retries
+failures with exponential backoff and honours `Retry-After`. Responses are
+cached in `data/raw/`, and a cached response is reused until its query
+changes or `--refresh` is given, so a full download (about 66 API requests
+and three kernel files) happens once per checkout. CI caches `data/raw/`
+with `actions/cache`, keyed on the `plan` output. JPL is asked again only
+when a query changes or the cache expires.
+
+**Provenance.** `data/raw/manifest.json` records, for every response, the
+service URL, the query parameters as sent, the UTC date and time it was
+fetched, and the SHA-256 and size of the bytes JPL returned. The responses
+are stored exactly as received. `tools/build_catalog.py` checks each one
+against its hash before using it. It then copies the manifest, together with
+the kernel hashes, to `data/catalog/manifest.json`, so every build records
+exactly which data it was made from. Each element table, trajectory and test
+reference also carries its fetch time in its header. CI uploads the
+manifest as the `data-manifest` artifact of each run.
+
+**Reproducibility.** The NAIF kernels are pinned by SHA-256, so the planets,
+the Sun and the Moon are the same in every build. The Horizons and SBDB
+answers are not pinned. JPL updates orbit solutions (SBDB most often, and
+its osculation epoch moves forward), so two builds made months apart can
+differ slightly in the moons, dwarf planets, comets, spacecraft and small
+bodies. The small-body counts below can change too. This was a deliberate
+trade-off, made so that JPL's data is not republished here (see the SSD
+terms below). Two builds can be compared through their manifests. The tests
+compare the orrery with Horizons within fixed tolerances, never with
+exact numbers, so they hold for any later fetch.
 
 ## Ephemerides and orbits
 
 ### JPL DE440 planetary ephemeris (DE440s kernel)
 
 - **What:** positions of the Sun, the planetary system barycentres, Mercury, Venus, Earth and the Moon, 1849-12-26 to 2150-01-22. They are read directly from the SPK file by `src/orrery/spk.cpp`, with no SPICE toolkit involved.
-- **File:** `de440s.bsp` from <https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/>, SHA-256 `c1c7feeab882263fc493a9d5a5b2ddd71b54826cdf65d8d17a76126b260a49f2`. It is not committed because it is 32 MB.
+- **File:** `de440s.bsp` from <https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/>, SHA-256 `c1c7feeab882263fc493a9d5a5b2ddd71b54826cdf65d8d17a76126b260a49f2`. Like all the JPL data, it is downloaded at build time and not committed.
 - **Reference:** Park, R. S., Folkner, W. M., Williams, J. G., Boggs, D. H. (2021), *The JPL Planetary and Lunar Ephemerides DE440 and DE441*, AJ 161:105, doi:10.3847/1538-3881/abd414.
 - **Terms:** distributed by NASA/JPL's Navigation and Ancillary Information Facility (NAIF) under NAIF's [rules for SPICE use](https://naif.jpl.nasa.gov/naif/rules.html). Use is free, and NAIF asks that it and the data producers be acknowledged; this file is that acknowledgement.
 
@@ -49,7 +83,7 @@ solutions, so it is a deliberate change.
 
 - **What:** heliocentric osculating elements (ecliptic J2000, full precision, one epoch per object) for the small-body samples below. It also supplies rotation periods for Eris, Haumea and Makemake, which SBDB credits to the Asteroid Lightcurve Database (LCDB, Warner et al. 2009).
 - **Service:** <https://ssd-api.jpl.nasa.gov/sbdb_query.api> and <https://ssd-api.jpl.nasa.gov/sbdb.api>.
-- **Samples** (each query is in `tools/bodies.py`; the counts were fetched on 2026-10-18):
+- **Samples** (each query is in `tools/bodies.py`; the counts are from a fetch on 2026-10-18 and change as SBDB grows):
 
 | Group | SBDB query | Objects |
 |---|---|---|
@@ -64,7 +98,22 @@ solutions, so it is a deliberate change.
 
 ### JPL Solar System Dynamics terms
 
-The SSD group's FAQ (<https://ssd.jpl.nasa.gov/faq.html>) asks people who republish information from its site to tell the group what they use and how. It also says that most site content is covered by JPL's copyright statement, and that use does not imply endorsement. This repository republishes numerical Horizons and SBDB output: the raw responses in `data/raw/` and the derived tables in `data/catalog/` and `tests/data/`. **Open item for the maintainer:** notifying SSD as the FAQ asks has not been done yet. If SSD objects, the alternative is to stop committing `data/raw/` and have CI fetch it, at the cost of reproducibility, because SBDB solutions change over time.
+The SSD group's FAQ (<https://ssd.jpl.nasa.gov/faq.html>) asks people who
+republish information from its site to tell the group what they use and how.
+It also says that most site content is covered by JPL's copyright statement,
+and that use does not imply endorsement.
+
+This repository does not republish Horizons or SBDB output. No API
+response and no table derived from one is committed. Each person who builds
+the orrery fetches the data from JPL for their own use, with
+`tools/fetch_data.py`. Earlier commits did contain the raw responses and
+the derived tables (in `data/raw/`, `data/catalog/` and `tests/data/`), and
+they are still in the git history.
+
+**Credit.** The orbits, trajectories and small-body elements come from the
+JPL Solar System Dynamics group's Horizons system and Small-Body Database,
+and the planetary ephemeris and physical constants come from NASA/JPL's
+NAIF. The orrery is not endorsed by NASA or JPL.
 
 ## Physical data
 
