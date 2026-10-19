@@ -29,6 +29,8 @@ struct ViewOptions {
     bool axes = false;
     bool hud = true;
     bool help = false;
+    float uiScale = 1;      // text size multiplier (the browser build: about devicePixelRatio)
+    bool keyHints = true;   // the HUD's bottom line of keys (off on touch screens)
     std::string timeLine;   // set by the app: date and rate
     std::string prompt;     // set by the app: date entry, or empty
 };
@@ -81,6 +83,7 @@ private:
     std::deque<std::string> textStorage_;  // deque: c_str() stays valid as it grows
     std::vector<float> meshPositions_, meshNormals_, meshColors_;
     std::vector<uint32_t> meshIndices_;
+    float textScale_ = 1;    // text(): multiplies position and size (the HUD's uiScale)
     uint32_t ringMesh_ = 0;  // this frame's ring mesh, replaced every frame
 
     // Textured spheres (ABI 1.7): one mesh per mapped body, built once around

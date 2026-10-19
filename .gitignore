@@ -1,4 +1,7 @@
 /build*/
+/web-site/
+/smoke-out/
+/web/smoke/node_modules/
 /out/
 *.usda
 !tests/**/*.usda

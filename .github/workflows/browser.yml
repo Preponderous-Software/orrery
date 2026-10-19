@@ -1,0 +1,126 @@
+# Builds the orrery for the browser (Emscripten, Strata's WebGL 2 device),
+# smoke-tests it in headless Chromium on a desktop and a phone profile, and,
+# when enabled, deploys it to arcade as https://orrery.play.danielstephenson.dev
+# (web/README.md).
+name: Browser build
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    name: Web build and smoke test (headless Chromium)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      EMSDK_VERSION: "6.0.11"        # Strata's (its docs/WEB.md)
+      PLAYWRIGHT_VERSION: "1.61.1"   # pins Chromium, hence SwiftShader
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CMake and Ninja
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake ninja-build
+          cmake --version
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.13"
+
+      # JPL data is fetched at build time, never committed (DATA_SOURCES.md),
+      # with the same caches as ci.yml.
+      - name: Cache NAIF kernels
+        uses: actions/cache@v4
+        with:
+          path: data/kernels
+          key: naif-kernels-${{ hashFiles('data/kernels.sha256') }}
+
+      - name: Write the JPL query manifest
+        run: |
+          mkdir -p build
+          uv run --python 3.12 tools/fetch_data.py plan > build/jpl-query-plan.json
+
+      - name: Cache JPL API responses
+        uses: actions/cache@v4
+        with:
+          path: data/raw
+          key: jpl-raw-${{ hashFiles('build/jpl-query-plan.json') }}
+
+      - name: Fetch data and build the catalogue
+        run: |
+          uv run --python 3.12 tools/fetch_data.py all
+          uv run --python 3.12 tools/build_catalog.py
+
+      - name: Web data (kernel and tables cut to 1980-2070)
+        run: |
+          uv run --python 3.12 tools/make_web_data.py build-web-data
+          uv run --python 3.12 tests/check_trim_spk.py data/kernels/de440s.bsp build-web-data/kernels/de440s.bsp 1980-01-01 2070-01-01
+
+      - name: Install emsdk
+        run: |
+          git clone --depth 1 --branch "$EMSDK_VERSION" https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          "$RUNNER_TEMP/emsdk/emsdk" install "$EMSDK_VERSION"
+          "$RUNNER_TEMP/emsdk/emsdk" activate "$EMSDK_VERSION"
+
+      - name: Build (Emscripten)
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          emcc --version | head -1
+          emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DORRERY_WARNINGS_AS_ERRORS=ON
+          cmake --build build-web -j4
+
+      - name: Assemble the site
+        run: |
+          mkdir -p web-site
+          cp build-web/index.html build-web/index.js build-web/index.wasm build-web/index.data web-site/
+          grep -q 'danielstephenson.dev/play' web-site/index.html
+          ls -la web-site
+          echo "site: $(du -sh web-site | cut -f1) on disk"
+          echo "first load (gzip): $(cat web-site/* | gzip -9 | wc -c) bytes"
+
+      - name: Install Playwright and Chromium
+        run: |
+          npm install --no-save --prefix web/smoke "playwright@$PLAYWRIGHT_VERSION"
+          npx --prefix web/smoke playwright install --with-deps chromium
+
+      - name: Smoke test (desktop, then iPhone 13 profile)
+        run: |
+          python3 -m http.server 8080 --bind 127.0.0.1 --directory web-site > http.log 2>&1 &
+          sleep 1
+          node web/smoke/smoke.cjs http://127.0.0.1:8080/ smoke-out/desktop
+          node web/smoke/smoke.cjs http://127.0.0.1:8080/ smoke-out/phone --phone
+
+      - name: Upload smoke screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-smoke
+          path: smoke-out/
+          if-no-files-found: ignore
+
+      - name: Write the deploy version
+        run: |
+          version=$(sed -n 's/^project(orrery VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          echo "${version}+g${GITHUB_SHA::7}" > "$RUNNER_TEMP/arcade-version.txt"
+          cat "$RUNNER_TEMP/arcade-version.txt"
+
+      - name: Deploy to arcade
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && vars.ARCADE_ENABLED == 'true')
+        uses: Stephenson-Software/arcade-deploy@v1
+        with:
+          slug: orrery
+          token: ${{ secrets.ARCADE_TOKEN }}
+          site-dir: web-site
+          version-file: ${{ runner.temp }}/arcade-version.txt

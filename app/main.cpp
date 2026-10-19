@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -26,8 +27,17 @@
 #include "strata/strata.hpp"
 #include "usda.hpp"
 
+#if defined(__EMSCRIPTEN__)
+#include <emscripten/emscripten.h>
+#endif
+
 #ifndef ORRERY_SOURCE_DIR
 #define ORRERY_SOURCE_DIR "."
+#endif
+#if defined(__EMSCRIPTEN__)
+#define ORRERY_DEFAULT_DATA "/data"  // the preloaded data file (tools/make_web_data.py)
+#else
+#define ORRERY_DEFAULT_DATA ORRERY_SOURCE_DIR "/data"
 #endif
 
 using namespace orrery;
@@ -50,7 +60,7 @@ constexpr int kRealTimeRate = 7;
 const double kEnlargements[] = {1, 10, 100, 500, 2000};
 
 struct Args {
-    std::string data = std::string(ORRERY_SOURCE_DIR) + "/data";
+    std::string data = ORRERY_DEFAULT_DATA;
     std::string date;  // empty: now
     std::string focus = "Sun";
     ScaleMode mode = ScaleMode::True;
@@ -175,10 +185,310 @@ double litFraction(const std::vector<uint8_t>& rgba) {
     return static_cast<double>(lit) / static_cast<double>(rgba.size() / 4);
 }
 
+int rateIndexFor(double rate) { return nearestIndex(kRates, static_cast<int>(sizeof kRates / sizeof kRates[0]), rate); }
+
+// Everything one view of the solar system needs, on the heap so that the
+// browser build's session outlives main().
+struct World {
+    Args args;
+    std::unique_ptr<SolarSystem> sys;
+    double jd = 0;
+    SystemState state;
+    std::unique_ptr<strata::Engine> engine;
+    std::unique_ptr<Renderer> renderer;
+    CameraState cam;
+    ViewOptions view;
+    int width = 0, height = 0;
+
+    FrameReport frame(const std::string& rate) {
+        sys->evaluate(jd, state, view.smallBodies);
+        renderer->layout(state, view.scale);
+        if (cam.distance <= 0) {
+            cam.distance = args.distanceAu > 0 ? args.distanceAu * kAuKm : renderer->defaultDistance(cam.focus);
+        }
+        view.timeLine = timeLine(jd, rate);
+        return renderer->draw(state, cam, view, width, height);
+    }
+};
+
+// The interactive viewer: keyboard and mouse (SDL events through Strata), one
+// step() per frame. The browser build also drives it from the page (touch,
+// the toolbar) through the orrery_* exports below.
+struct Interactive {
+    std::unique_ptr<World> w;
+    int rateIndex;
+    bool paused = false, running = true, dragging = false, entering = false;
+    std::string entry;
+    bool keys[512] = {};
+    std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+    int shot = 0;
+    long frames = 0;
+    FrameReport report;
+    std::string status;  // orrery_status(): JSON for the page
+
+    Interactive(std::unique_ptr<World> world, int rate) : w(std::move(world)), rateIndex(rate) {}
+
+    double clampJd(double jd) const { return std::clamp(jd, w->sys->firstJd(), w->sys->lastJd()); }
+
+    void focus(int body) {
+        if (body < 0 || body >= static_cast<int>(w->sys->bodies().size())) return;
+        w->cam.focus = body;
+        w->cam.freeFly = false;
+        w->cam.distance = w->renderer->defaultDistance(body);
+    }
+
+    void orbit(double dx, double dy) {
+        CameraState& cam = w->cam;
+        const double sign = cam.freeFly ? -1 : 1;
+        cam.yawDeg -= dx * 0.3 * sign;
+        cam.pitchDeg = std::clamp(cam.pitchDeg + dy * 0.3 * sign, -89.0, 89.0);
+    }
+
+    void zoom(double factor) {
+        if (factor > 0 && std::isfinite(factor)) w->cam.distance *= factor;
+    }
+
+    void key(int scancode, bool shift) {
+        const SolarSystem& sys = *w->sys;
+        CameraState& cam = w->cam;
+        ViewOptions& view = w->view;
+        Renderer& renderer = *w->renderer;
+        double& jd = w->jd;
+        if (entering) {
+            if (scancode == kReturn) {
+                CalendarDate c;
+                if (parseIsoDate(entry, c)) jd = clampJd(utcToTdb(julianDate(c)));
+                entering = false;
+            } else if (scancode == kEscape) {
+                entering = false;
+            } else if (scancode == kBackspace && !entry.empty()) {
+                entry.pop_back();
+            }
+            return;
+        }
+        switch (scancode) {
+            case kEscape:
+#if !defined(__EMSCRIPTEN__)
+                running = false;  // a page is closed by the browser, not by Esc
+#endif
+                break;
+            case kSpace: paused = !paused; break;
+            case kComma: rateIndex = std::max(rateIndex - 1, 0); break;
+            case kPeriod: rateIndex = std::min(rateIndex + 1, static_cast<int>(sizeof kRates / sizeof kRates[0]) - 1); break;
+            case kN:
+                jd = clampJd(utcToTdb(nowUtc()));
+                rateIndex = kRealTimeRate;
+                paused = false;
+                break;
+            case kJ: entering = true; entry.clear(); break;
+            case kTab: focus(cycle(sys, w->state, cam.focus, shift ? -1 : 1)); break;
+            case kHome: focus(0); break;
+            case kM:
+                view.scale.mode = view.scale.mode == ScaleMode::True ? ScaleMode::Compressed : ScaleMode::True;
+                renderer.layout(w->state, view.scale);
+                cam.distance = renderer.defaultDistance(cam.focus);
+                break;
+            case kLeftBracket:
+            case kRightBracket: {
+                int e = nearestIndex(kEnlargements, 5, view.scale.enlarge);
+                e = std::clamp(e + (scancode == kRightBracket ? 1 : -1), 0, 4);
+                view.scale.enlarge = kEnlargements[e];
+                break;
+            }
+            case kO: view.orbits = !view.orbits; break;
+            case kL: view.labels = !view.labels; break;
+            case kB: view.smallBodies = !view.smallBodies; break;
+            case kX: view.axes = !view.axes; break;
+            case kH: view.help = !view.help; break;
+            case kF:
+                if (!cam.freeFly) {
+                    cam.eye = renderer.eyeOf(cam);
+                    const Vec3 fwd = renderer.forwardOf(cam);
+                    cam.yawDeg = std::atan2(fwd.y, fwd.x) / kDegToRad;
+                    cam.pitchDeg = std::asin(std::clamp(fwd.z, -1.0, 1.0)) / kDegToRad;
+                    cam.freeFly = true;
+                } else {
+                    cam.freeFly = false;
+                    cam.yawDeg += 180;
+                    cam.pitchDeg = -cam.pitchDeg;
+                    cam.distance = length(cam.eye - renderer.drawn()[static_cast<size_t>(cam.focus)]);
+                }
+                break;
+            case kPageUp: cam.distance /= 1.5; break;
+            case kPageDown: cam.distance *= 1.5; break;
+#if !defined(__EMSCRIPTEN__)
+            case kP: {
+                char name[64];
+                std::snprintf(name, sizeof name, "orrery-%03d.png", shot++);
+                w->engine->saveScreenshotPng(name);
+                std::printf("wrote %s\n", name);
+                break;
+            }
+            case kU: writeUsda("orrery.usda", sys, w->state); std::puts("wrote orrery.usda"); break;
+#endif
+            default:
+                if (scancode >= k1 && scancode <= k0) {
+                    focus(scancode == k0 ? 0 : scancode - k1 + 1);  // bodies.csv: Sun, Mercury..Neptune, Pluto
+                }
+        }
+    }
+
+    void event(const StrataEvent& ev) {
+        if (ev.type == STRATA_EVENT_QUIT) {
+            running = false;
+        } else if (ev.type == STRATA_EVENT_RESIZED) {
+            w->width = std::max(ev.width, 1);
+            w->height = std::max(ev.height, 1);
+        } else if (ev.type == STRATA_EVENT_TEXT_INPUT && entering) {
+            for (const char* p = ev.text; *p; ++p) {
+                if (std::strchr("0123456789-:T ", *p) && entry.size() < 19) entry += *p;
+            }
+        } else if (ev.type == STRATA_EVENT_KEY_UP && ev.scancode >= 0 && ev.scancode < 512) {
+            keys[ev.scancode] = false;
+        } else if (ev.type == STRATA_EVENT_KEY_DOWN) {
+            if (ev.scancode >= 0 && ev.scancode < 512) keys[ev.scancode] = true;
+            key(ev.scancode, (ev.modifiers & kShift) != 0);
+        }
+#if !defined(__EMSCRIPTEN__)
+        // In a browser the page handles pointers (mouse, touch, pinch) and
+        // calls orrery_orbit/orrery_zoom, so SDL's mouse events are not used.
+        else if (ev.type == STRATA_EVENT_MOUSE_BUTTON_DOWN) {
+            dragging = true;
+        } else if (ev.type == STRATA_EVENT_MOUSE_BUTTON_UP) {
+            dragging = false;
+        } else if (ev.type == STRATA_EVENT_MOUSE_MOTION && dragging) {
+            orbit(ev.dx, ev.dy);
+        } else if (ev.type == STRATA_EVENT_MOUSE_WHEEL) {
+            zoom(std::pow(0.85, ev.y));
+        }
+#endif
+    }
+
+    void step() {
+        StrataEvent ev;
+        while (w->engine->pollEvent(ev)) event(ev);
+#if defined(__EMSCRIPTEN__)
+        // The canvas follows the page; draw at its size in device pixels.
+        int32_t dw = 0, dh = 0;
+        w->engine->drawableSize(dw, dh);
+        if (dw > 0 && dh > 0) {
+            w->width = dw;
+            w->height = dh;
+        }
+#endif
+        const auto now = std::chrono::steady_clock::now();
+        const double dt = std::min(std::chrono::duration<double>(now - last).count(), 0.1);
+        last = now;
+        const double rate = kRates[rateIndex];
+        CameraState& cam = w->cam;
+        Renderer& renderer = *w->renderer;
+        if (!paused) w->jd = clampJd(w->jd + rate * dt);
+        if (cam.freeFly) {
+            // Speed scales with the distance to the nearest body's surface.
+            double nearest = 1e300;
+            for (size_t i = 0; i < renderer.drawn().size(); ++i) {
+                nearest = std::min(nearest, length(renderer.drawn()[i] - cam.eye) - renderer.drawnRadius(static_cast<int>(i)));
+            }
+            const double speed = std::max(nearest, 100.0) * 0.8 * dt;
+            const Vec3 fwd = renderer.forwardOf(cam);
+            const Vec3 right = normalize(cross(fwd, Vec3{0, 0, 1}));
+            const Vec3 up = cross(right, fwd);
+            if (keys[kW]) cam.eye += fwd * speed;
+            if (keys[kS]) cam.eye -= fwd * speed;
+            if (keys[kD]) cam.eye += right * speed;
+            if (keys[kA]) cam.eye -= right * speed;
+            if (keys[kE]) cam.eye += up * speed;
+            if (keys[kQ]) cam.eye -= up * speed;
+        }
+        w->view.prompt = entering ? "Jump to date (UTC, YYYY-MM-DD[THH:MM]): " + entry + "_" : "";
+        report = w->frame(rateText(rate, paused));
+        w->engine->present();
+        ++frames;
+    }
+
+    const char* statusJson() {
+        const Body& b = w->sys->bodies()[static_cast<size_t>(w->cam.focus)];
+        char buf[768];
+        std::snprintf(buf, sizeof buf,
+                      "{\"frames\":%ld,\"focus\":%d,\"focusName\":\"%s\",\"freeFly\":%s,\"paused\":%s,"
+                      "\"rate\":\"%s\",\"date\":\"%s\",\"mode\":\"%s\",\"width\":%d,\"height\":%d,"
+                      "\"spheres\":%d,\"points\":%d,\"lineVertices\":%d,\"labelCount\":%d,"
+                      "\"labels\":%s,\"orbits\":%s,\"help\":%s,\"firstDate\":\"%s\",\"lastDate\":\"%s\"}",
+                      frames, w->cam.focus, b.name.c_str(), w->cam.freeFly ? "true" : "false",
+                      paused ? "true" : "false", rateText(kRates[rateIndex], paused).c_str(),
+                      formatIsoDate(calendarDate(tdbToUtc(w->jd))).c_str(),
+                      w->view.scale.mode == ScaleMode::True ? "true" : "compressed", w->width, w->height,
+                      report.spheres, report.points, report.lineVertices, report.labels,
+                      w->view.labels ? "true" : "false", w->view.orbits ? "true" : "false",
+                      w->view.help ? "true" : "false",
+                      formatIsoDate(calendarDate(tdbToUtc(w->sys->firstJd()))).c_str(),
+                      formatIsoDate(calendarDate(tdbToUtc(w->sys->lastJd()))).c_str());
+        status = buf;
+        return status.c_str();
+    }
+};
+
+#if defined(__EMSCRIPTEN__)
+Interactive* gLive = nullptr;
+#endif
+
 }  // namespace
 
+#if defined(__EMSCRIPTEN__)
+// Called by the page (web/shell.html): pointer and touch input, the toolbar,
+// and the smoke test's status read. All are no-ops until the session exists.
+extern "C" {
+EMSCRIPTEN_KEEPALIVE void orrery_resize(int cssWidth, int cssHeight) {
+    if (gLive && cssWidth > 0 && cssHeight > 0) gLive->w->engine->resize(cssWidth, cssHeight);
+}
+// Text scale: the page passes about devicePixelRatio, so the HUD and labels keep
+// their size on a phone's dense screen.
+EMSCRIPTEN_KEEPALIVE void orrery_ui_scale(double scale) {
+    if (gLive && std::isfinite(scale)) gLive->w->view.uiScale = static_cast<float>(std::clamp(scale, 1.0, 4.0));
+}
+// The HUD's keyboard hint line; the page turns it off on touch screens.
+EMSCRIPTEN_KEEPALIVE void orrery_key_hints(int on) {
+    if (gLive) gLive->w->view.keyHints = on != 0;
+}
+EMSCRIPTEN_KEEPALIVE void orrery_orbit(double dx, double dy) {
+    if (gLive) gLive->orbit(dx, dy);
+}
+EMSCRIPTEN_KEEPALIVE void orrery_zoom(double factor) {
+    if (gLive) gLive->zoom(factor);
+}
+EMSCRIPTEN_KEEPALIVE void orrery_key(int scancode, int shift) {
+    if (gLive) gLive->key(scancode, shift != 0);
+}
+EMSCRIPTEN_KEEPALIVE void orrery_focus(int body) {
+    if (gLive) gLive->focus(body);
+}
+EMSCRIPTEN_KEEPALIVE int orrery_set_date(const char* iso) {
+    CalendarDate c;
+    if (!gLive || !iso || !parseIsoDate(iso, c)) return 0;
+    gLive->w->jd = gLive->clampJd(utcToTdb(julianDate(c)));
+    return 1;
+}
+EMSCRIPTEN_KEEPALIVE int orrery_body_count() { return gLive ? static_cast<int>(gLive->w->sys->bodies().size()) : 0; }
+EMSCRIPTEN_KEEPALIVE const char* orrery_body_name(int body) {
+    if (!gLive || body < 0 || body >= orrery_body_count()) return "";
+    return gLive->w->sys->bodies()[static_cast<size_t>(body)].name.c_str();
+}
+EMSCRIPTEN_KEEPALIVE const char* orrery_body_kind(int body) {
+    if (!gLive || body < 0 || body >= orrery_body_count()) return "";
+    return kindName(gLive->w->sys->bodies()[static_cast<size_t>(body)].kind);
+}
+EMSCRIPTEN_KEEPALIVE const char* orrery_status() { return gLive ? gLive->statusJson() : "{}"; }
+// Stops and restarts the frame loop (the smoke test holds a frame still for its screenshots).
+EMSCRIPTEN_KEEPALIVE void orrery_hold(int hold) {
+    if (hold) emscripten_pause_main_loop();
+    else emscripten_resume_main_loop();
+}
+}
+#endif
+
 int main(int argc, char** argv) {
-    Args args;
+    auto world = std::make_unique<World>();
+    Args& args = world->args;
     try {
         if (!parse(argc, argv, args)) return usage();
     } catch (const std::invalid_argument&) {
@@ -190,11 +500,13 @@ int main(int argc, char** argv) {
     }
 
     try {
-        const SolarSystem sys(args.data);
+        world->sys = std::make_unique<SolarSystem>(args.data);
+        const SolarSystem& sys = *world->sys;
         std::printf("orrery: %zu bodies, %zu small bodies; DE440s covers JD %.1f..%.1f\n", sys.bodies().size(),
                     sys.smallBodies().size(), sys.firstJd(), sys.lastJd());
 
-        double jd = utcToTdb(nowUtc());
+        double& jd = world->jd;
+        jd = utcToTdb(nowUtc());
         if (!args.date.empty()) {
             CalendarDate c;
             if (!parseIsoDate(args.date, c)) {
@@ -205,7 +517,7 @@ int main(int argc, char** argv) {
         }
         jd = std::clamp(jd, sys.firstJd(), sys.lastJd());
 
-        SystemState state;
+        SystemState& state = world->state;
         sys.evaluate(jd, state);
 
         if (!args.usda.empty()) {
@@ -220,12 +532,13 @@ int main(int argc, char** argv) {
         desc.height = args.height;
         desc.title = "orrery";
         desc.flags = args.headless ? 0u : static_cast<uint32_t>(STRATA_FLAG_VSYNC);
-        auto engine = strata::Engine::create(desc);
+        world->engine = strata::Engine::create(desc);
+        auto& engine = world->engine;
         std::printf("GPU: %s\n", engine->gpuDescription().c_str());
 
-        Renderer renderer(*engine, sys, args.data + "/textures");
-        CameraState cam;
-        ViewOptions view;
+        world->renderer = std::make_unique<Renderer>(*engine, sys, args.data + "/textures");
+        CameraState& cam = world->cam;
+        ViewOptions& view = world->view;
         view.scale.mode = args.mode;
         view.scale.enlarge = args.enlarge;
         view.labels = args.labels;
@@ -241,16 +554,9 @@ int main(int argc, char** argv) {
         cam.yawDeg = args.yaw;
         cam.pitchDeg = args.pitch;
 
-        int width = args.width, height = args.height;
-        auto frame = [&](const std::string& rate) {
-            sys.evaluate(jd, state, view.smallBodies);
-            renderer.layout(state, view.scale);
-            if (cam.distance <= 0) {
-                cam.distance = args.distanceAu > 0 ? args.distanceAu * kAuKm : renderer.defaultDistance(cam.focus);
-            }
-            view.timeLine = timeLine(jd, rate);
-            return renderer.draw(state, cam, view, width, height);
-        };
+        world->width = args.width;
+        world->height = args.height;
+        auto frame = [&](const std::string& rate) { return world->frame(rate); };
 
         // ---- smoke test: three views, each must be visibly drawn
         if (!args.smokeDir.empty()) {
@@ -309,149 +615,18 @@ int main(int argc, char** argv) {
         }
 
         // ---- interactive
-        int rateIndex = nearestIndex(kRates, static_cast<int>(sizeof kRates / sizeof kRates[0]), args.rate);
-        bool paused = false, running = true, dragging = false, entering = false;
-        std::string entry;
-        bool keys[512] = {};
-        auto last = std::chrono::steady_clock::now();
-        int shot = 0;
+        auto* live = new Interactive(std::move(world), rateIndexFor(args.rate));
+#if defined(__EMSCRIPTEN__)
+        // The browser runs the frames (requestAnimationFrame); main returns and
+        // the session lives on (it is never freed: the page owns its lifetime).
+        gLive = live;
+        std::puts("orrery: running in the browser; the toolbar and H list the controls.");
+        emscripten_set_main_loop_arg([](void* p) { static_cast<Interactive*>(p)->step(); }, live, 0, false);
+#else
         std::puts("H for help in the window. Esc quits.");
-        while (running) {
-            StrataEvent ev;
-            while (engine->pollEvent(ev)) {
-                if (ev.type == STRATA_EVENT_QUIT) running = false;
-                else if (ev.type == STRATA_EVENT_RESIZED) {
-                    width = std::max(ev.width, 1);
-                    height = std::max(ev.height, 1);
-                } else if (ev.type == STRATA_EVENT_TEXT_INPUT && entering) {
-                    for (const char* p = ev.text; *p; ++p) {
-                        if (std::strchr("0123456789-:T ", *p) && entry.size() < 19) entry += *p;
-                    }
-                } else if (ev.type == STRATA_EVENT_KEY_UP && ev.scancode >= 0 && ev.scancode < 512) {
-                    keys[ev.scancode] = false;
-                } else if (ev.type == STRATA_EVENT_KEY_DOWN) {
-                    if (ev.scancode >= 0 && ev.scancode < 512) keys[ev.scancode] = true;
-                    const bool shift = (ev.modifiers & kShift) != 0;
-                    if (entering) {
-                        if (ev.scancode == kReturn) {
-                            CalendarDate c;
-                            if (parseIsoDate(entry, c)) jd = std::clamp(utcToTdb(julianDate(c)), sys.firstJd(), sys.lastJd());
-                            entering = false;
-                        } else if (ev.scancode == kEscape) {
-                            entering = false;
-                        } else if (ev.scancode == kBackspace && !entry.empty()) {
-                            entry.pop_back();
-                        }
-                        continue;
-                    }
-                    switch (ev.scancode) {
-                        case kEscape: running = false; break;
-                        case kSpace: paused = !paused; break;
-                        case kComma: rateIndex = std::max(rateIndex - 1, 0); break;
-                        case kPeriod:
-                            rateIndex = std::min(rateIndex + 1, static_cast<int>(sizeof kRates / sizeof kRates[0]) - 1);
-                            break;
-                        case kN:
-                            jd = std::clamp(utcToTdb(nowUtc()), sys.firstJd(), sys.lastJd());
-                            rateIndex = kRealTimeRate;
-                            paused = false;
-                            break;
-                        case kJ: entering = true; entry.clear(); break;
-                        case kTab:
-                            cam.focus = cycle(sys, state, cam.focus, shift ? -1 : 1);
-                            cam.freeFly = false;
-                            cam.distance = renderer.defaultDistance(cam.focus);
-                            break;
-                        case kHome: cam.focus = 0; cam.freeFly = false; cam.distance = renderer.defaultDistance(0); break;
-                        case kM:
-                            view.scale.mode = view.scale.mode == ScaleMode::True ? ScaleMode::Compressed : ScaleMode::True;
-                            renderer.layout(state, view.scale);
-                            cam.distance = renderer.defaultDistance(cam.focus);
-                            break;
-                        case kLeftBracket:
-                        case kRightBracket: {
-                            int e = nearestIndex(kEnlargements, 5, view.scale.enlarge);
-                            e = std::clamp(e + (ev.scancode == kRightBracket ? 1 : -1), 0, 4);
-                            view.scale.enlarge = kEnlargements[e];
-                            break;
-                        }
-                        case kO: view.orbits = !view.orbits; break;
-                        case kL: view.labels = !view.labels; break;
-                        case kB: view.smallBodies = !view.smallBodies; break;
-                        case kX: view.axes = !view.axes; break;
-                        case kH: view.help = !view.help; break;
-                        case kF:
-                            if (!cam.freeFly) {
-                                cam.eye = renderer.eyeOf(cam);
-                                const Vec3 fwd = renderer.forwardOf(cam);
-                                cam.yawDeg = std::atan2(fwd.y, fwd.x) / kDegToRad;
-                                cam.pitchDeg = std::asin(std::clamp(fwd.z, -1.0, 1.0)) / kDegToRad;
-                                cam.freeFly = true;
-                            } else {
-                                cam.freeFly = false;
-                                cam.yawDeg += 180;
-                                cam.pitchDeg = -cam.pitchDeg;
-                                cam.distance = length(cam.eye - renderer.drawn()[static_cast<size_t>(cam.focus)]);
-                            }
-                            break;
-                        case kPageUp: cam.distance /= 1.5; break;
-                        case kPageDown: cam.distance *= 1.5; break;
-                        case kP: {
-                            char name[64];
-                            std::snprintf(name, sizeof name, "orrery-%03d.png", shot++);
-                            engine->saveScreenshotPng(name);
-                            std::printf("wrote %s\n", name);
-                            break;
-                        }
-                        case kU: writeUsda("orrery.usda", sys, state); std::puts("wrote orrery.usda"); break;
-                        default:
-                            if (ev.scancode >= k1 && ev.scancode <= k0) {
-                                const int digit = ev.scancode == k0 ? 0 : ev.scancode - k1 + 1;
-                                if (digit < static_cast<int>(sys.bodies().size())) {
-                                    cam.focus = digit;  // bodies.csv: Sun, Mercury..Neptune, Pluto
-                                    cam.freeFly = false;
-                                    cam.distance = renderer.defaultDistance(digit);
-                                }
-                            }
-                    }
-                } else if (ev.type == STRATA_EVENT_MOUSE_BUTTON_DOWN) {
-                    dragging = true;
-                } else if (ev.type == STRATA_EVENT_MOUSE_BUTTON_UP) {
-                    dragging = false;
-                } else if (ev.type == STRATA_EVENT_MOUSE_MOTION && dragging) {
-                    const double sign = cam.freeFly ? -1 : 1;
-                    cam.yawDeg -= ev.dx * 0.3 * sign;
-                    cam.pitchDeg = std::clamp(cam.pitchDeg + ev.dy * 0.3 * sign, -89.0, 89.0);
-                } else if (ev.type == STRATA_EVENT_MOUSE_WHEEL) {
-                    cam.distance *= std::pow(0.85, ev.y);
-                }
-            }
-            const auto now = std::chrono::steady_clock::now();
-            const double dt = std::min(std::chrono::duration<double>(now - last).count(), 0.1);
-            last = now;
-            const double rate = kRates[rateIndex];
-            if (!paused) jd = std::clamp(jd + rate * dt, sys.firstJd(), sys.lastJd());
-            if (cam.freeFly) {
-                // Speed scales with the distance to the nearest body's surface.
-                double nearest = 1e300;
-                for (size_t i = 0; i < renderer.drawn().size(); ++i) {
-                    nearest = std::min(nearest, length(renderer.drawn()[i] - cam.eye) - renderer.drawnRadius(static_cast<int>(i)));
-                }
-                const double speed = std::max(nearest, 100.0) * 0.8 * dt;
-                const Vec3 fwd = renderer.forwardOf(cam);
-                const Vec3 right = normalize(cross(fwd, Vec3{0, 0, 1}));
-                const Vec3 up = cross(right, fwd);
-                if (keys[kW]) cam.eye += fwd * speed;
-                if (keys[kS]) cam.eye -= fwd * speed;
-                if (keys[kD]) cam.eye += right * speed;
-                if (keys[kA]) cam.eye -= right * speed;
-                if (keys[kE]) cam.eye += up * speed;
-                if (keys[kQ]) cam.eye -= up * speed;
-            }
-            view.prompt = entering ? "Jump to date (UTC, YYYY-MM-DD[THH:MM]): " + entry + "_" : "";
-            frame(rateText(rate, paused));
-            engine->present();
-        }
+        while (live->running) live->step();
+        delete live;
+#endif
         return 0;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "orrery: %s\n", e.what());

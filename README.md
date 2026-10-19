@@ -12,6 +12,9 @@ The whole solar system from real JPL data, drawn with
 
 Bodies are placed from JPL ephemerides at any instant from 1850 to 2149.
 
+**In a browser:** <https://orrery.play.danielstephenson.dev> (1980 to 2070;
+drag to orbit, pinch or scroll to zoom). See [web/README.md](web/README.md).
+
 <p align="center">
   <img src="docs/media/hero.gif" width="640" alt="The inner solar system through 2026 at true distances, planets enlarged 500 times and the Sun 20 times: the planets move along their orbits, the asteroid belt and Jupiter trojans turn, labels follow the bodies">
 </p>
@@ -85,6 +88,9 @@ ctest --test-dir build --output-on-failure
 ./build/orrery --headless --frames out/ --count 120 --step 3              # frames for a video
 ./build/orrery --date 2026-10-18 --export-usda solar-system.usda           # an OpenUSD layer
 ```
+
+The browser build (Emscripten, WebGL 2) is described in
+[web/README.md](web/README.md).
 
 Headless rendering uses an EGL surfaceless context, so it needs no X server.
 On a machine with no GPU, set `LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe`.
@@ -195,7 +201,9 @@ textures and per-mesh model matrices
 ([Strata #16](https://github.com/Preponderous-Software/strata/pull/16), ABI 1.7):
 each mapped body is one textured sphere mesh built once, and every frame only
 its model matrix changes (pole, prime meridian, drawn radius and position
-relative to the eye). The Sun's sphere is unlit.
+relative to the eye). The Sun's sphere is unlit. The browser build uses Strata's WebGL 2 device and
+Emscripten build
+([Strata #18](https://github.com/Preponderous-Software/strata/pull/18)).
 
 **Precision** is handled in the orrery, not in Strata:
 
