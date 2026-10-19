@@ -283,9 +283,9 @@ void Renderer::addRings(int planet, const SystemState& state, const Scale& scale
 void Renderer::text(float x, float y, float size, const float color[4], const std::string& s) {
     textStorage_.push_back(s);
     StrataText t{};
-    t.x = x;
-    t.y = y;
-    t.pixel_size = size;
+    t.x = x * textScale_;
+    t.y = y * textScale_;
+    t.pixel_size = size * textScale_;
     t.flags = STRATA_TEXT_SHADOW;
     std::memcpy(t.color, color, sizeof t.color);
     t.utf8 = textStorage_.back().c_str();
@@ -505,11 +505,17 @@ FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, con
                 if (kind == BodyKind::Moon && bodies[i].parent != system && static_cast<int>(i) != cam.focus &&
                     bodies[i].naif != 301)
                     continue;
-                tryLabel(i, kind == BodyKind::Moon ? 8.0f : 16.0f);
+                tryLabel(i, (kind == BodyKind::Moon ? 8.0f : 16.0f) * view.uiScale);
             }
         }
     }
-    if (view.hud) hud(state, cam, view, width, height);
+    if (view.hud) {
+        // The HUD is laid out in text pixels and drawn uiScale times larger.
+        const float u = std::max(view.uiScale, 1.0f);
+        textScale_ = u;
+        hud(state, cam, view, static_cast<int>(static_cast<float>(width) / u), static_cast<int>(static_cast<float>(height) / u));
+        textScale_ = 1;
+    }
 
     // ---- submit
     StrataFrameDesc frame{};
@@ -607,7 +613,9 @@ void Renderer::hud(const SystemState& state, const CameraState& cam, const ViewO
         text(10, y, small, kDim, buf);
     }
     if (!view.prompt.empty()) text(10, static_cast<float>(height) - 60, big, kWarn, view.prompt);
-    text(10, static_cast<float>(height) - 14 - small, small, kDim, "H help   Tab next body   M scale mode   Space pause");
+    if (view.keyHints) {
+        text(10, static_cast<float>(height) - 14 - small, small, kDim, "H help   Tab next body   M scale mode   Space pause");
+    }
 
     if (view.help) {
         static const char* lines[] = {
@@ -621,8 +629,12 @@ void Renderer::hud(const SystemState& state, const CameraState& cam, const ViewO
             "M            TRUE / COMPRESSED scale",
             "[ ]          body enlargement (TRUE mode)",
             "O  L  B  X   orbits, labels, small bodies, spin axes",
+#if defined(__EMSCRIPTEN__)
+            "Touch        drag to orbit, pinch to zoom; the toolbar does the rest",
+#else
             "P            screenshot         U  export USD layer",
             "Esc          quit",
+#endif
         };
         float hy = static_cast<float>(height) / 2 - 120;
         const float hx = static_cast<float>(width) / 2 - 300;

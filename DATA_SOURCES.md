@@ -104,7 +104,12 @@ It also says that most site content is covered by JPL's copyright statement,
 and that use does not imply endorsement.
 
 This repository does not republish Horizons or SBDB output. No API
-response and no table derived from one is committed. Each person who builds
+response and no table derived from one is committed.
+
+The browser build is different. Its data file (`index.data`, built in CI by
+`tools/make_web_data.py`) holds the derived tables for 1980 to 2070. It is
+served publicly at <https://orrery.play.danielstephenson.dev>, so that site
+does republish them, with the credit below. Each person who builds
 the orrery fetches the data from JPL for their own use, with
 `tools/fetch_data.py`. Earlier commits did contain the raw responses and
 the derived tables (in `data/raw/`, `data/catalog/` and `tests/data/`), and

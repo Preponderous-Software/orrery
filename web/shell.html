@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Orrery</title>
+<meta name="description" content="The solar system from NASA/JPL data, in the browser: planets, moons, comets, spacecraft and 12,000 asteroids, drawn with the Strata engine in WebGL 2.">
+<style>
+  :root { color-scheme: dark; --bg: #05070b; --bar: #10141b; --fg: #e8e6e1; --muted: #9aa0a8; --accent: #e8a24a;
+          --line: #2a313c; --button: #1a2029; --button-on: #3a2f1c; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg);
+               font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+  body { display: flex; flex-direction: column; height: 100dvh; }
+  .stage { position: relative; flex: 1 1 auto; min-height: 0; }
+  /* SDL sizes the canvas in CSS pixels; the page decides instead, and the
+     canvas follows it (Strata draws at that size times devicePixelRatio). */
+  canvas#canvas { position: absolute; inset: 0; display: block; width: 100% !important; height: 100% !important;
+                  outline: none; touch-action: none; cursor: grab; background: #000; }
+  canvas#canvas.dragging { cursor: grabbing; }
+  #status { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted);
+            pointer-events: none; text-align: center; padding: 16px; }
+  #status.error { color: #ff8a80; pointer-events: auto; }
+  nav { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 12px;
+        padding-bottom: max(8px, env(safe-area-inset-bottom)); background: var(--bar); border-top: 1px solid var(--line); }
+  nav .group { display: flex; gap: 4px; align-items: center; }
+  button, select, input { font: inherit; color: var(--fg); background: var(--button); border: 1px solid var(--line);
+                          border-radius: 6px; min-height: 36px; padding: 0 10px; }
+  button { cursor: pointer; min-width: 36px; }
+  button[aria-pressed="true"] { background: var(--button-on); border-color: var(--accent); }
+  button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  select { max-width: 11em; }
+  input[type="date"] { width: 10.5em; }
+  nav a { color: var(--muted); margin-left: auto; white-space: nowrap; order: 99; }
+  nav .break { display: none; }
+  nav a:hover { color: var(--fg); }
+  #rate { color: var(--muted); min-width: 6.5em; text-align: center; font-variant-numeric: tabular-nums; }
+  @media (max-width: 640px) {
+    /* Two rows on a phone: the body picker, then time and view. */
+    nav { gap: 4px; padding: 6px 8px; padding-bottom: max(6px, env(safe-area-inset-bottom)); }
+    button, select, input { min-height: 40px; padding: 0 8px; }
+    button, select, input { padding: 0 7px; }
+    nav .group:first-child { flex: 1 1 0; min-width: 0; }
+    nav .group:first-child select { flex: 1 1 auto; max-width: none; min-width: 0; }
+    nav a { order: 0; margin-left: 4px; font-size: 13px; }
+    nav .break { display: block; flex-basis: 100%; height: 0; }
+    .wide, #rate { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+  <canvas id="canvas" tabindex="0" aria-label="The solar system. Drag to orbit, pinch or scroll to zoom."
+          oncontextmenu="event.preventDefault()"></canvas>
+  <div id="status">Loading the solar system (about 20 MB of JPL data)...</div>
+</div>
+<nav aria-label="Orrery controls">
+  <div class="group">
+    <button id="prev" title="Previous body (Shift+Tab)" aria-label="Previous body">&lsaquo;</button>
+    <select id="body" aria-label="Focus on a body"></select>
+    <button id="next" title="Next body (Tab)" aria-label="Next body">&rsaquo;</button>
+  </div>
+  <a href="https://danielstephenson.dev/play">More games</a>
+  <span class="break" aria-hidden="true"></span>
+  <div class="group">
+    <button id="slower" title="Slower (,)" aria-label="Slower">&laquo;</button>
+    <button id="pause" title="Play / pause (Space)" aria-pressed="false">Pause</button>
+    <button id="faster" title="Faster (.)" aria-label="Faster">&raquo;</button>
+    <span id="rate" aria-live="polite"></span>
+  </div>
+  <div class="group">
+    <button id="now" title="Now, at real time (N)">Now</button>
+    <input id="date" class="wide" type="date" aria-label="Jump to a date" title="Jump to a date (J)">
+  </div>
+  <div class="group">
+    <button id="mode" title="True or compressed (log) scale (M)" aria-pressed="false">Log scale</button>
+    <button id="labels" title="Labels (L)" aria-pressed="true">Labels</button>
+    <button id="orbits" class="wide" title="Orbits (O)" aria-pressed="true">Orbits</button>
+    <button id="help" class="wide" title="Keyboard help (H)" aria-pressed="false">Keys</button>
+  </div>
+</nav>
+<script>
+  // SDL3 scancodes (USB HID usage ids), as orrery_key takes them.
+  const KEY = { tab: 43, space: 44, comma: 54, period: 55, n: 17, m: 16, l: 15, o: 18, h: 11 };
+  const status = document.getElementById('status');
+  const canvas = document.getElementById('canvas');
+  function fail(text) { status.textContent = text; status.className = 'error'; status.style.display = 'grid'; }
+  if (!document.createElement('canvas').getContext('webgl2')) {
+    fail('This browser has no WebGL 2, which the orrery needs.');
+  }
+  var Module = {
+    canvas: canvas,
+    // Keys reach the orrery only while the canvas has focus, so typing in the
+    // date box does not also fly the camera.
+    preRun: [() => { ENV.SDL_EMSCRIPTEN_KEYBOARD_ELEMENT = '#canvas'; }],
+    print: (text) => console.log(text),
+    printErr: (text) => console.warn(text),
+    setStatus: (text) => { if (text) status.textContent = text; },
+    onAbort: (what) => fail('The orrery stopped: ' + what),
+  };
+  window.addEventListener('error', (e) => fail('Error: ' + e.message));
+
+  let api = null;
+  function ready() {
+    api = {
+      resize: Module.cwrap('orrery_resize', null, ['number', 'number']),
+      orbit: Module.cwrap('orrery_orbit', null, ['number', 'number']),
+      zoom: Module.cwrap('orrery_zoom', null, ['number']),
+      key: Module.cwrap('orrery_key', null, ['number', 'number']),
+      focus: Module.cwrap('orrery_focus', null, ['number']),
+      setDate: Module.cwrap('orrery_set_date', 'number', ['string']),
+      count: Module.cwrap('orrery_body_count', 'number', []),
+      name: Module.cwrap('orrery_body_name', 'string', ['number']),
+      kind: Module.cwrap('orrery_body_kind', 'string', ['number']),
+      status: () => JSON.parse(Module.ccall('orrery_status', 'string', [], [])),
+      hold: Module.cwrap('orrery_hold', null, ['number']),
+      uiScale: Module.cwrap('orrery_ui_scale', null, ['number']),
+      keyHints: Module.cwrap('orrery_key_hints', null, ['number']),
+    };
+    window.orrery = api;  // for the smoke test (web/smoke/smoke.mjs)
+    const select = document.getElementById('body');
+    const groups = {};
+    for (let i = 0; i < api.count(); i++) {
+      const kind = api.kind(i);
+      const label = { star: 'Sun', planet: 'Planets', 'dwarf planet': 'Dwarf planets', moon: 'Moons',
+                      comet: 'Comets', spacecraft: 'Spacecraft' }[kind] || kind;
+      if (!groups[label]) { groups[label] = document.createElement('optgroup'); groups[label].label = label;
+                            select.appendChild(groups[label]); }
+      const option = document.createElement('option');
+      option.value = i; option.textContent = api.name(i);
+      groups[label].appendChild(option);
+    }
+    const s = api.status();
+    const date = document.getElementById('date');
+    date.min = s.firstDate.slice(0, 10); date.max = s.lastDate.slice(0, 10);
+    fit();
+    status.style.display = 'none';
+    canvas.focus({ preventScroll: true });
+    window.orreryReady = true;
+    setInterval(sync, 250);
+    sync();
+  }
+  // The C++ side starts its loop at the end of main(); the exports exist from then on.
+  Module.onRuntimeInitialized = () => { const wait = () => (Module._orrery_body_count() > 0 ? ready() : setTimeout(wait, 30)); wait(); };
+
+  function fit() {
+    if (!api) return;
+    const r = canvas.getBoundingClientRect();
+    // Text at the page's pixel density, a little smaller on a narrow screen so
+    // the HUD's lines fit (they are laid out for at least 440 CSS pixels).
+    api.uiScale((window.devicePixelRatio || 1) * Math.min(1, r.width / 440));
+    api.keyHints(!matchMedia('(pointer: coarse)').matches);
+    api.resize(Math.max(1, Math.round(r.width)), Math.max(1, Math.round(r.height)));
+  }
+  new ResizeObserver(fit).observe(document.querySelector('.stage'));
+
+  // Toolbar state follows the orrery (keys change it too).
+  function sync() {
+    const s = api.status();
+    const select = document.getElementById('body');
+    if (document.activeElement !== select && String(select.value) !== String(s.focus)) select.value = s.focus;
+    const pause = document.getElementById('pause');
+    pause.textContent = s.paused ? 'Play' : 'Pause';
+    pause.setAttribute('aria-pressed', String(s.paused));
+    document.getElementById('rate').textContent = s.paused ? '' : s.rate;
+    document.getElementById('mode').setAttribute('aria-pressed', String(s.mode === 'compressed'));
+    for (const id of ['labels', 'orbits', 'help']) document.getElementById(id).setAttribute('aria-pressed', String(s[id]));
+  }
+  function press(code, shift) { if (api) { api.key(code, shift ? 1 : 0); sync(); } }
+  document.getElementById('prev').onclick = () => press(KEY.tab, true);
+  document.getElementById('next').onclick = () => press(KEY.tab, false);
+  document.getElementById('body').onchange = (e) => { api.focus(Number(e.target.value)); sync(); };
+  document.getElementById('slower').onclick = () => press(KEY.comma);
+  document.getElementById('faster').onclick = () => press(KEY.period);
+  document.getElementById('pause').onclick = () => press(KEY.space);
+  document.getElementById('now').onclick = () => press(KEY.n);
+  document.getElementById('mode').onclick = () => press(KEY.m);
+  document.getElementById('labels').onclick = () => press(KEY.l);
+  document.getElementById('orbits').onclick = () => press(KEY.o);
+  document.getElementById('help').onclick = () => press(KEY.h);
+  document.getElementById('date').onchange = (e) => { if (api && e.target.value) api.setDate(e.target.value); };
+
+  // Pointers: one finger or the mouse orbits, two fingers pinch to zoom, the
+  // wheel zooms. All in CSS pixels, as the desktop build's mouse is.
+  const pointers = new Map();
+  let pinch = 0;
+  function spread() {
+    const [a, b] = [...pointers.values()];
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  }
+  canvas.addEventListener('pointerdown', (e) => {
+    canvas.focus({ preventScroll: true });
+    canvas.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    canvas.classList.add('dragging');
+    if (pointers.size === 2) pinch = spread();
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    const p = pointers.get(e.pointerId);
+    if (!p || !api) return;
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    p.x = e.clientX; p.y = e.clientY;
+    if (pointers.size === 1) {
+      api.orbit(dx, dy);
+    } else if (pointers.size === 2) {
+      const d = spread();
+      if (pinch > 0 && d > 0) api.zoom(pinch / d);
+      pinch = d;
+    }
+  });
+  function lift(e) {
+    pointers.delete(e.pointerId);
+    pinch = pointers.size === 2 ? spread() : 0;
+    if (pointers.size === 0) canvas.classList.remove('dragging');
+  }
+  canvas.addEventListener('pointerup', lift);
+  canvas.addEventListener('pointercancel', lift);
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    if (!api) return;
+    const lines = e.deltaMode === 1 ? e.deltaY : e.deltaY / 100;
+    api.zoom(Math.pow(0.85, -lines));
+  }, { passive: false });
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

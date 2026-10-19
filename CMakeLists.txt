@@ -8,7 +8,13 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-option(ORRERY_BUILD_TESTS "Build the tests" ON)
+if(EMSCRIPTEN)
+  # The browser build (web/README.md): the app only. The tests run natively.
+  set(ORRERY_BUILD_TESTS_DEFAULT OFF)
+else()
+  set(ORRERY_BUILD_TESTS_DEFAULT ON)
+endif()
+option(ORRERY_BUILD_TESTS "Build the tests" ${ORRERY_BUILD_TESTS_DEFAULT})
 option(ORRERY_WITH_STRATA "Build the renderer app on the Strata engine" ON)
 option(ORRERY_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 
@@ -16,6 +22,22 @@ option(ORRERY_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/strata.ref" ORRERY_STRATA_REF_DEFAULT)
 string(STRIP "${ORRERY_STRATA_REF_DEFAULT}" ORRERY_STRATA_REF_DEFAULT)
 set(ORRERY_STRATA_REF "${ORRERY_STRATA_REF_DEFAULT}" CACHE STRING "Strata git ref (a full commit SHA)")
+
+if(EMSCRIPTEN)
+  # One exception mode for the whole module: Strata's (STRATA_WASM_EXCEPTIONS,
+  # wasm by default; docs/WEB.md in Strata). orrery throws and catches too.
+  set(STRATA_WASM_EXCEPTIONS "wasm" CACHE STRING "C++ exceptions in WebAssembly: wasm or js (Strata's option)")
+  if(STRATA_WASM_EXCEPTIONS STREQUAL "wasm")
+    set(ORRERY_WASM_EH_FLAG -fwasm-exceptions)
+  else()
+    set(ORRERY_WASM_EH_FLAG -fexceptions)
+  endif()
+  add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:${ORRERY_WASM_EH_FLAG}>")
+  add_link_options(${ORRERY_WASM_EH_FLAG})
+  # The data the page preloads (tools/make_web_data.py).
+  set(ORRERY_WEB_DATA "${CMAKE_CURRENT_SOURCE_DIR}/build-web-data" CACHE PATH
+      "Directory packaged as the browser build's /data (tools/make_web_data.py)")
+endif()
 
 function(orrery_warnings target)
   if(MSVC)
@@ -77,6 +99,21 @@ if(ORRERY_WITH_STRATA)
   target_link_libraries(orrery PRIVATE orrery_core orrery_stb strata::static)
   target_compile_definitions(orrery PRIVATE ORRERY_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
   orrery_warnings(orrery)
+
+  if(EMSCRIPTEN)
+    # index.html + index.js + index.wasm + index.data: the whole site.
+    if(NOT EXISTS "${ORRERY_WEB_DATA}/catalog/bodies.csv")
+      message(FATAL_ERROR "no web data in ${ORRERY_WEB_DATA}: run tools/make_web_data.py first (web/README.md)")
+    endif()
+    set_target_properties(orrery PROPERTIES OUTPUT_NAME index SUFFIX ".html")
+    target_link_options(orrery PRIVATE
+      -sALLOW_MEMORY_GROWTH=1
+      -sSTACK_SIZE=1MB
+      -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,ENV
+      "--preload-file=${ORRERY_WEB_DATA}@/data"
+      "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html")
+    set_property(TARGET orrery APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html")
+  endif()
 
   if(ORRERY_BUILD_TESTS)
     # Headless render smoke test: renders three views and checks the frames
