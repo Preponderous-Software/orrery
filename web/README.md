@@ -3,8 +3,9 @@
 The same app, compiled with Emscripten and drawn by Strata's WebGL 2 device
 (Strata's [docs/WEB.md](https://github.com/Preponderous-Software/strata/blob/main/docs/WEB.md)).
 `.github/workflows/browser.yml` builds it, smoke-tests it in headless
-Chromium and, on `main` with the repository variable `ARCADE_ENABLED=true`,
-deploys it to arcade as <https://orrery.play.danielstephenson.dev>.
+Chromium and deploys it to arcade as <https://orrery.play.danielstephenson.dev>,
+either on a push to `main` when the repository variable `ARCADE_ENABLED` is
+`true`, or whenever the workflow is run by hand.
 
 ## What differs from the desktop build
 

@@ -186,6 +186,7 @@ The other tests:
 - `test_rotation` checks the body frames built from the IAU rotation elements: each frame is right-handed and orthonormal with +Z on the pole, W = 0 puts the prime meridian on the ascending node, and Earth's pole is 23.44° from ecliptic north with its prime meridian back in place after one sidereal day.
 - `render_smoke` renders three views headless and checks that each frame is lit, with the expected numbers of spheres, points, orbit vertices and labels.
 - CI also opens the exported USD layer with OpenUSD (`tests/check_usda.py`).
+- The browser build's CI checks that the DE440s kernel cut for the web gives the same positions as the full kernel, bit for bit (`tests/check_trim_spk.py`; see [web/README.md](web/README.md)).
 
 ## Engine features this needed
 
