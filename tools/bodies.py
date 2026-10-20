@@ -40,7 +40,7 @@ MAJOR_BODIES = [
 # Every natural satellite whose mean radius in pck00011.tpc is at least
 # 100 km, plus Phobos and Deimos. The Moon comes from DE440s; the rest from
 # Horizons osculating elements relative to the planet's centre, sampled every
-# MOON_SPAN[2] and interpolated (see src/orrery/elements.cpp).
+# MOON_SPAN[2] and interpolated (see src/orrery/element_table.cpp).
 _moon_color = [0.70, 0.68, 0.65]
 MOONS = [
     {"name": "Phobos", "naif": 401, "parent": 499},
