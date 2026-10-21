@@ -17,7 +17,7 @@ struct CsvTable {
     // Throws std::runtime_error naming the file and column.
     const std::string& text(const std::vector<std::string>& row, const std::string& name) const;
     double number(const std::vector<std::string>& row, const std::string& name) const;
-    // NaN for an empty cell.
+    // `fallback` for an empty cell.
     double numberOr(const std::vector<std::string>& row, const std::string& name, double fallback) const;
 };
 

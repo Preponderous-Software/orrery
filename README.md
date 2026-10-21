@@ -180,10 +180,11 @@ For scale:
 
 The other tests:
 
-- `test_kepler` covers Kepler's equation (elliptic and hyperbolic) to 1e-12, circular and eccentric orbits, the state ↔ elements round trip, and table interpolation that is exact against a synthetic Phobos-like orbit.
+- `test_kepler` covers Kepler's equation (elliptic and hyperbolic) to 1e-12, circular and eccentric orbits (by mean and by eccentric anomaly), the state ↔ elements round trip, and table interpolation that is exact against a synthetic Phobos-like orbit.
 - `test_time` covers Julian Dates, leap seconds and TDB − UTC, and ISO parsing.
 - `test_scale` checks that TRUE mode leaves positions untouched and multiplies radii by exactly the stated factor, and that COMPRESSED mode keeps direction and order. It also checks unit conversions (au, obliquity).
 - `test_rotation` checks the body frames built from the IAU rotation elements: each frame is right-handed and orthonormal with +Z on the pole, W = 0 puts the prime meridian on the ascending node, and Earth's pole is 23.44° from ecliptic north with its prime meridian back in place after one sidereal day.
+- `test_csv` covers the catalogue's CSV reader: comment and blank lines, CRLF line ends, empty cells, the fallback for an empty number, and errors that name the file for a ragged row, a missing header, an unknown column or a cell that is not a number.
 - `render_smoke` renders three views headless and checks that each frame is lit, with the expected numbers of spheres, points, orbit vertices and labels.
 - CI also opens the exported USD layer with OpenUSD (`tests/check_usda.py`).
 - The browser build's CI checks that the DE440s kernel cut for the web gives the same positions as the full kernel, bit for bit (`tests/check_trim_spk.py`; see [web/README.md](web/README.md)).

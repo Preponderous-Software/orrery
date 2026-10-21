@@ -48,6 +48,12 @@ int main() {
     // The orbit normal makes the inclination with +Z.
     const Vec3 a = positionAtMeanAnomaly(el, 0.3), b = positionAtMeanAnomaly(el, 1.3);
     CHECK(std::fabs(std::acos(normalize(cross(a, b)).z) / kDegToRad - 30.0) < 1e-9);
+    // Eccentric anomaly E is the point with mean anomaly E - e sin E; r = a (1 - e cos E).
+    for (double E = 0.0; E < 2 * kPi; E += 0.4) {
+        const Vec3 p = positionAtEccentricAnomaly(el, E);
+        CHECK(length(p - positionAtMeanAnomaly(el, E - el.e * std::sin(E))) < 1e-12);
+        CHECK(std::fabs(length(p) - el.a * (1 - el.e * std::cos(E))) < 1e-12);
+    }
 
     SECTION("state -> elements -> state round trip (Earth-like, km and km/s)");
     const double gm = 132712440041.279419;
