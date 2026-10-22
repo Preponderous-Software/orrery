@@ -20,6 +20,12 @@ either on a push to `main` when the repository variable `ARCADE_ENABLED` is
   - one finger or the mouse orbits.
   - two fingers pinch to zoom, and the wheel zooms.
   - the toolbar (`web/shell.html`) does what the keys do: pick or step through bodies, pause, slower or faster, now, a date, log scale, labels, orbits, the key list.
+  - **Ship** in the toolbar boards the ship (`V`). On a touch screen its controls show over the canvas:
+    - a thumb stick on the left steers (pitch and yaw) while it is held off centre, gently near the centre, and springs back when let go.
+    - a throttle lever on the right runs from 25% reverse at the bottom to full at the top, with a detent at zero, and stays where it is left. Moving it takes control back from the autopilot.
+    - buttons above the lever: drive tier up and down, autopilot, roll left and right (held), stop, the cockpit view and exit.
+
+    On a desktop these are hidden, and the keyboard and mouse fly the ship. The **Joystick** toolbar toggle shows them, for a touchscreen laptop for example; the browser remembers the choice. Dragging the canvas also steers, and in the ship the wheel steps the drive tier instead of zooming.
 
   Keys still work while the canvas has focus. `P` (screenshot), `U` (USD export) and `Esc` (quit) do nothing in a browser.
 - **Text** is drawn at the screen's pixel density (`orrery_ui_scale`), a
@@ -57,7 +63,11 @@ node web/smoke/smoke.cjs http://127.0.0.1:8000/ out/phone --phone     # iPhone 1
 It checks that frames keep coming and prints the frame rate. It checks that the
 frame holds the solar system and is not blank. Then, with time paused, it
 checks that a drag orbits, that the wheel or a two-finger pinch zooms, and that
-the toolbar changes the focus. Screenshots are written to the output directory.
+the toolbar changes the focus. It then boards the ship from the toolbar and checks
+that its controls show at once on the phone, but only after the Joystick toggle on
+the desktop. It checks that the throttle lever opens the throttle and stays put, that
+the stick steers and springs back, that a drive button steps the drive, and that Exit
+leaves the ship. Screenshots are written to the output directory.
 Headless Chromium draws with SwiftShader, which is software WebGL. It runs at
 about 7 to 9 frames a second at 1280 × 747, so its frame rate is a lower bound,
 not what a GPU gives.

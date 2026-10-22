@@ -34,6 +34,29 @@
   nav a { color: var(--muted); margin-left: auto; white-space: nowrap; order: 99; }
   nav .break { display: none; }
   nav a:hover { color: var(--fg); }
+  /* The ship's flight controls over the canvas: a thumb stick (left) that
+     steers, a throttle lever (right) that stays where it is left, and a few
+     buttons. Always on a touch screen; on a desktop, the Joystick toggle. */
+  #flight { position: absolute; inset: 0; display: none; pointer-events: none; }
+  #flight.on { display: block; }
+  #flight > * { pointer-events: auto; touch-action: none; user-select: none; -webkit-user-select: none; }
+  #stick { position: absolute; left: max(16px, env(safe-area-inset-left)); bottom: 24%; width: 116px; height: 116px;
+           border-radius: 50%; border: 2px solid rgba(232, 162, 74, 0.55); background: rgba(16, 20, 27, 0.45); }
+  #knob { position: absolute; left: 50%; top: 50%; width: 50px; height: 50px; margin: -25px 0 0 -25px;
+          border-radius: 50%; background: rgba(232, 162, 74, 0.8); pointer-events: none; }
+  #lever { position: absolute; right: max(16px, env(safe-area-inset-right)); bottom: 24%; width: 52px; height: 150px;
+           border-radius: 12px; border: 2px solid rgba(232, 162, 74, 0.55); background: rgba(16, 20, 27, 0.45); }
+  /* The handle's centre runs from 13 px above the bottom (-25%) to 13 px below the top (100%). */
+  #lever .zero { position: absolute; left: 6px; right: 6px; bottom: calc(13px + (100% - 26px) * 0.2);
+                 border-top: 1px dashed var(--muted); }
+  #handle { position: absolute; left: 3px; right: 3px; height: 26px; bottom: calc((100% - 26px) * 0.2);
+            border-radius: 8px; background: rgba(232, 162, 74, 0.85); pointer-events: none; }
+  #flight-buttons { position: absolute; right: max(16px, env(safe-area-inset-right)); bottom: calc(24% + 162px);
+                    display: grid; grid-template-columns: repeat(3, auto); gap: 4px; }
+  #flight-buttons button { min-width: 46px; min-height: 40px; padding: 0 6px; font-size: 12px;
+                           background: rgba(26, 32, 41, 0.72); }
+  #flight-buttons button.held { background: var(--button-on); border-color: var(--accent); }
+  @media (pointer: coarse) { #joystick { display: none; } }
   #rate { color: var(--muted); min-width: 6.5em; text-align: center; font-variant-numeric: tabular-nums; }
   @media (max-width: 640px) {
     /* Two rows on a phone: the body picker, then time and view. */
@@ -53,6 +76,22 @@
   <canvas id="canvas" tabindex="0" aria-label="The solar system. Drag to orbit, pinch or scroll to zoom."
           oncontextmenu="event.preventDefault()"></canvas>
   <div id="status">Loading the solar system (about 20 MB of JPL data)...</div>
+  <div id="flight" aria-label="Ship controls">
+    <div id="flight-buttons" role="group" aria-label="Ship buttons">
+      <button data-key="75" id="drive-up" title="Next drive tier (PgUp, wheel up)">Drv +</button>
+      <button data-key="78" id="drive-down" title="Previous drive tier (PgDn, wheel down)">Drv &minus;</button>
+      <button data-key="23" id="autopilot" title="Autopilot to the target (T)" aria-pressed="false">Auto</button>
+      <button data-hold="20" id="roll-left" title="Roll left (Q, hold)" aria-label="Roll left">&#8634;</button>
+      <button data-hold="8" id="roll-right" title="Roll right (E, hold)" aria-label="Roll right">&#8635;</button>
+      <button data-key="29" id="stop" title="All stop (Z)">Stop</button>
+      <button data-key="6" id="view" title="Chase camera or cockpit (C)" aria-pressed="false">View</button>
+      <button data-key="25" id="leave" title="Leave the ship (V)">Exit</button>
+    </div>
+    <div id="stick" role="slider" aria-label="Steer: pitch and yaw"><div id="knob"></div></div>
+    <div id="lever" role="slider" aria-label="Throttle" aria-valuemin="-25" aria-valuemax="100" aria-valuenow="0">
+      <div class="zero"></div><div id="handle"></div>
+    </div>
+  </div>
 </div>
 <nav aria-label="Orrery controls">
   <div class="group">
@@ -75,13 +114,16 @@
   <div class="group">
     <button id="mode" title="True or compressed (log) scale (M)" aria-pressed="false">Log scale</button>
     <button id="labels" title="Labels (L)" aria-pressed="true">Labels</button>
+    <button id="ship" title="Fly a ship (V)" aria-pressed="false">Ship</button>
+    <button id="joystick" title="On-screen joystick and throttle in the ship" aria-pressed="false" hidden>Joystick</button>
     <button id="orbits" class="wide" title="Orbits (O)" aria-pressed="true">Orbits</button>
     <button id="help" class="wide" title="Keyboard help (H)" aria-pressed="false">Keys</button>
   </div>
 </nav>
 <script>
   // SDL3 scancodes (USB HID usage ids), as orrery_key takes them.
-  const KEY = { tab: 43, space: 44, comma: 54, period: 55, n: 17, m: 16, l: 15, o: 18, h: 11 };
+  const KEY = { tab: 43, space: 44, comma: 54, period: 55, n: 17, m: 16, l: 15, o: 18, h: 11, v: 25,
+                pageUp: 75, pageDown: 78 };
   const status = document.getElementById('status');
   const canvas = document.getElementById('canvas');
   function fail(text) { status.textContent = text; status.className = 'error'; status.style.display = 'grid'; }
@@ -116,6 +158,9 @@
       hold: Module.cwrap('orrery_hold', null, ['number']),
       uiScale: Module.cwrap('orrery_ui_scale', null, ['number']),
       keyHints: Module.cwrap('orrery_key_hints', null, ['number']),
+      holdKey: Module.cwrap('orrery_hold_key', null, ['number', 'number']),
+      stick: Module.cwrap('orrery_stick', null, ['number', 'number']),
+      throttle: Module.cwrap('orrery_throttle', null, ['number']),
     };
     window.orrery = api;  // for the smoke test (web/smoke/smoke.mjs)
     const select = document.getElementById('body');
@@ -155,8 +200,18 @@
   new ResizeObserver(fit).observe(document.querySelector('.stage'));
 
   // Toolbar state follows the orrery (keys change it too).
+  let flying = false;
   function sync() {
     const s = api.status();
+    flying = s.ship;
+    document.getElementById('ship').setAttribute('aria-pressed', String(s.ship));
+    document.getElementById('joystick').hidden = !s.ship;
+    document.getElementById('joystick').setAttribute('aria-pressed', String(joystickOn));
+    document.getElementById('flight').classList.toggle('on', s.ship && (touchScreen || joystickOn));
+    if (!s.ship) releaseAll();
+    if (!leverHeld) showThrottle(s.throttle);
+    document.getElementById('autopilot').setAttribute('aria-pressed', String(s.autopilot));
+    document.getElementById('view').setAttribute('aria-pressed', String(s.cockpit));
     const select = document.getElementById('body');
     if (document.activeElement !== select && String(select.value) !== String(s.focus)) select.value = s.focus;
     const pause = document.getElementById('pause');
@@ -179,6 +234,103 @@
   document.getElementById('orbits').onclick = () => press(KEY.o);
   document.getElementById('help').onclick = () => press(KEY.h);
   document.getElementById('date').onchange = (e) => { if (api && e.target.value) api.setDate(e.target.value); };
+  document.getElementById('ship').onclick = () => press(KEY.v);
+
+  // The ship's controls. Buttons press a key once; the roll buttons hold
+  // theirs down while touched. On a desktop they show only with the toggle,
+  // remembered in this browser.
+  const touchScreen = matchMedia('(pointer: coarse)').matches;
+  let joystickOn = false;
+  try { joystickOn = localStorage.getItem('orrery.joystick') === '1'; } catch (e) {}
+  document.getElementById('joystick').onclick = () => {
+    joystickOn = !joystickOn;
+    try { localStorage.setItem('orrery.joystick', joystickOn ? '1' : '0'); } catch (e) {}
+    sync();
+  };
+  const held = new Map();  // pointerId -> button
+  function release(id) {
+    const b = held.get(id);
+    if (!b) return;
+    held.delete(id);
+    b.classList.remove('held');
+    if (api) api.holdKey(Number(b.dataset.hold), 0);
+  }
+  function releaseAll() {
+    for (const id of [...held.keys()]) release(id);
+    if (api) api.stick(0, 0);
+    knob.style.transform = '';
+  }
+  for (const b of document.querySelectorAll('#flight-buttons button')) {
+    if (b.dataset.key) {
+      b.onclick = () => { press(Number(b.dataset.key)); canvas.focus({ preventScroll: true }); };
+      continue;
+    }
+    b.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      if (!api) return;
+      b.setPointerCapture(e.pointerId);
+      held.set(e.pointerId, b);
+      b.classList.add('held');
+      api.holdKey(Number(b.dataset.hold), 1);
+    });
+    for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) b.addEventListener(type, (e) => release(e.pointerId));
+  }
+  window.addEventListener('blur', releaseAll);
+
+  // The stick: steers while held off centre, springs back when let go.
+  const stick = document.getElementById('stick'), knob = document.getElementById('knob');
+  let stickId = null;
+  function moveStick(e) {
+    const r = stick.getBoundingClientRect();
+    const reach = r.width / 2 - 25;
+    let dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+    const d = Math.hypot(dx, dy);
+    if (d > reach) { dx *= reach / d; dy *= reach / d; }
+    knob.style.transform = `translate(${dx}px, ${dy}px)`;
+    if (api) api.stick(dx / reach, -dy / reach);
+  }
+  stick.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    stick.setPointerCapture(e.pointerId);
+    stickId = e.pointerId;
+    moveStick(e);
+  });
+  stick.addEventListener('pointermove', (e) => { if (e.pointerId === stickId) moveStick(e); });
+  for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+    stick.addEventListener(type, (e) => {
+      if (e.pointerId !== stickId) return;
+      stickId = null;
+      knob.style.transform = '';
+      if (api) api.stick(0, 0);
+    });
+  }
+
+  // The throttle lever: from reverse (-25%) at the bottom to full at the top,
+  // with a detent at zero; it stays where it is let go.
+  const lever = document.getElementById('lever'), handle = document.getElementById('handle');
+  let leverHeld = null;
+  function showThrottle(t) {
+    handle.style.bottom = `calc((100% - 26px) * ${0.2 + 0.8 * t})`;
+    lever.setAttribute('aria-valuenow', String(Math.round(t * 100)));
+  }
+  function moveLever(e) {
+    const r = lever.getBoundingClientRect();
+    const up = Math.min(Math.max((r.bottom - 13 - e.clientY) / (r.height - 26), 0), 1);
+    let t = (up - 0.2) / 0.8;
+    if (Math.abs(t) < 0.05) t = 0;
+    showThrottle(t);
+    if (api) api.throttle(t);
+  }
+  lever.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    lever.setPointerCapture(e.pointerId);
+    leverHeld = e.pointerId;
+    moveLever(e);
+  });
+  lever.addEventListener('pointermove', (e) => { if (e.pointerId === leverHeld) moveLever(e); });
+  for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+    lever.addEventListener(type, (e) => { if (e.pointerId === leverHeld) leverHeld = null; });
+  }
 
   // Pointers: one finger or the mouse orbits, two fingers pinch to zoom, the
   // wheel zooms. All in CSS pixels, as the desktop build's mouse is.
@@ -215,11 +367,20 @@
   }
   canvas.addEventListener('pointerup', lift);
   canvas.addEventListener('pointercancel', lift);
+  // In the ship the wheel steps the drive instead: one tier per notch, and a
+  // trackpad's stream of small deltas adds up to a notch first.
+  let wheelSum = 0, wheelAt = 0;
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
     if (!api) return;
     const lines = e.deltaMode === 1 ? e.deltaY : e.deltaY / 100;
-    api.zoom(Math.pow(0.85, -lines));
+    if (!flying) { api.zoom(Math.pow(0.85, -lines)); return; }
+    wheelSum += lines;
+    if (Math.abs(wheelSum) >= 1 && performance.now() - wheelAt > 150) {
+      press(wheelSum < 0 ? KEY.pageUp : KEY.pageDown);
+      wheelSum = 0;
+      wheelAt = performance.now();
+    }
   }, { passive: false });
 </script>
 {{{ SCRIPT }}}

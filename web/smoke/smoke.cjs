@@ -6,7 +6,9 @@
 // coming (it prints the frame rate), that the frame is drawn (bodies, orbits,
 // asteroids and labels, and lit pixels on screen), that a drag orbits the
 // camera, that zooming works (the wheel on the desktop, a two-finger pinch on
-// the phone) and that the toolbar changes the focus. Screenshots go to OUT_DIR.
+// the phone) and that the toolbar changes the focus. Then it boards the ship
+// from the toolbar and flies it with the touch pad (a held throttle button, a
+// drive button) and leaves again. Screenshots go to OUT_DIR.
 // --phone uses Playwright's iPhone 13 profile (touch, 390x664, DPR 3).
 const fs = require('fs');
 const path = require('path');
@@ -161,6 +163,66 @@ async function shot(page, name) {
     await page.waitForTimeout(200);
     await page.screenshot({ path: path.join(out, 'page.png') });
     await page.evaluate(() => window.orrery.hold(0));
+
+    // The ship: board from the toolbar. Its on-screen controls show at once on
+    // a touch screen; on the desktop only after the Joystick toggle.
+    await page.locator('#ship').click();
+    await page.waitForFunction(() => window.orrery.status().ship === true, null, { timeout: 10000 });
+    await page.waitForFunction(() => window.orrery.status().shipTriangles > 0, null, { timeout: 10000 });
+    check(true, 'the Ship button boards the ship and it is drawn');
+    await page.waitForTimeout(400);
+    if (phone) {
+      check(await page.locator('#flight').isVisible(), 'on a touch screen the stick and throttle show at once');
+    } else {
+      check(!(await page.locator('#flight').isVisible()), 'on the desktop the on-screen controls are off by default');
+      await page.locator('#joystick').click();
+      check(await page.locator('#flight').isVisible(), 'the Joystick toggle shows them');
+    }
+    await page.locator('#drive-up').click();
+    await page.waitForFunction(() => window.orrery.status().drive === 'cruise', null, { timeout: 10000 });
+    check(true, 'Drv + steps the drive to cruise');
+
+    // Press, drag and let go at page coordinates: a finger on the phone, the mouse otherwise.
+    const drag = async (from, to, holdMs) => {
+      if (phone) {
+        await touch('touchStart', [from]);
+        for (let i = 1; i <= 8; i++) await touch('touchMove', [[from[0] + (to[0] - from[0]) * i / 8, from[1] + (to[1] - from[1]) * i / 8]]);
+      } else {
+        await page.mouse.move(from[0], from[1]);
+        await page.mouse.down();
+        await page.mouse.move(to[0], to[1], { steps: 8 });
+      }
+      await page.waitForTimeout(holdMs);
+      const during = await status();
+      if (phone) await touch('touchEnd', []);
+      else await page.mouse.up();
+      await page.waitForTimeout(300);
+      return during;
+    };
+    // Throttle lever: drag the handle to the top; it stays there.
+    const lever = await page.locator('#lever').boundingBox();
+    const lx = lever.x + lever.width / 2;
+    await drag([lx, lever.y + lever.height * 0.8], [lx, lever.y + 2], 100);
+    const thrown = await status();
+    check(thrown.throttle > 0.9, `the throttle lever pushed to the top opens the throttle (${thrown.throttle})`);
+    await page.waitForTimeout(800);
+    const moving = await status();
+    check(moving.throttle === thrown.throttle && moving.speed > 0,
+      `let go, the lever stays (${moving.throttle}) and the ship moves (${moving.speed} km/s)`);
+    // Stick: held to the right it steers; let go it centres.
+    const stick = await page.locator('#stick').boundingBox();
+    const sx = stick.x + stick.width / 2, sy = stick.y + stick.height / 2;
+    const steering = await drag([sx, sy], [sx + 60, sy], 400);
+    check(steering.stickX > 0.5, `the stick held right steers (stick x ${steering.stickX})`);
+    check((await status()).stickX === 0, 'let go, the stick centres');
+
+    await page.evaluate(() => window.orrery.hold(1));
+    await page.waitForTimeout(200);
+    await page.screenshot({ path: path.join(out, 'ship-page.png') });
+    await page.evaluate(() => window.orrery.hold(0));
+    await page.locator('#leave').click();
+    await page.waitForFunction(() => window.orrery.status().ship === false, null, { timeout: 10000 });
+    check(!(await page.locator('#flight').isVisible()), 'Exit returns to the orbit view and hides the controls');
 
     check(errors.length === 0, 'no page errors' + (errors.length ? ': ' + errors.join(' | ') : ''));
     console.log('smoke test passed (' + (phone ? 'phone' : 'desktop') + ')');

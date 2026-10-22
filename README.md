@@ -13,7 +13,8 @@ The whole solar system from real JPL data, drawn with
 Bodies are placed from JPL ephemerides at any instant from 1850 to 2149.
 
 **In a browser:** <https://orrery.play.danielstephenson.dev> (1980 to 2070;
-drag to orbit, pinch or scroll to zoom). See [web/README.md](web/README.md).
+drag to orbit, pinch or scroll to zoom; **Ship** to fly, with a thumb stick and a
+throttle lever on a touch screen). See [web/README.md](web/README.md).
 
 <p align="center">
   <img src="docs/media/hero.gif" width="640" alt="The inner solar system through 2026 at true distances, planets enlarged 500 times and the Sun 20 times: the planets move along their orbits, the asteroid belt and Jupiter trojans turn, labels follow the bodies">
@@ -166,6 +167,8 @@ up through speed tiers.
 | `Z` | all stop |
 | `C` | chase camera / cockpit |
 | `V` | leave the ship |
+
+In the browser, the toolbar's **Ship** button boards the ship. On a touch screen, a thumb stick steers, a throttle lever sets the throttle, and buttons do the rest. On a desktop they are hidden unless the **Joystick** toggle is on ([web/README.md](web/README.md)).
 
 ## What is drawn, and from what
 
