@@ -117,7 +117,7 @@ if(ORRERY_WITH_STRATA)
   endif()
 
   if(ORRERY_BUILD_TESTS)
-    # Headless render smoke test: renders three views and checks the frames
+    # Headless render smoke test: renders four views and checks the frames
     # are not blank. Needs a GL 4.5 context (llvmpipe is fine).
     add_test(NAME render_smoke COMMAND orrery --data "${CMAKE_CURRENT_SOURCE_DIR}/data" --smoke-test
              "${CMAKE_CURRENT_BINARY_DIR}/smoke")
