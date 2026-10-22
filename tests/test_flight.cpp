@@ -114,6 +114,61 @@ int main() {
         CHECK(ship.forward.y < 0);  // yaw right: from +X with +Z up, right is -Y
     }
 
+    SECTION("the controls: tier and throttle clamp, and autopilot needs a present target and yields to the stick");
+    {
+        Ship ship;
+        ship.setTier(-3);
+        CHECK(ship.tier() == 0 && ship.topSpeed() == kDriveTiers[0].topKmPerS);
+        ship.setTier(99);
+        CHECK(ship.tier() == kDriveTierCount - 1 && ship.topSpeed() == kDriveTiers[kDriveTierCount - 1].topKmPerS);
+        ship.setThrottle(2);
+        CHECK(ship.throttle() == 1);
+        ship.setThrottle(-1);
+        CHECK(ship.throttle() == -0.25);
+        ship.setThrottle(0.5);
+        CHECK(ship.throttle() == 0.5);
+
+        // Held throttle keys stop at the same limits.
+        std::vector<FlightBody> bodies = world();
+        ship.place({0, 3 * kAuKm, 0}, {0, 1, 0});  // deep space
+        FlightControls up;
+        up.throttleRate = 1;
+        run(ship, bodies, 2, up);
+        CHECK(ship.throttle() == 1);
+        FlightControls down;
+        down.throttleRate = -1;
+        run(ship, bodies, 2, down);
+        CHECK(ship.throttle() == -0.25);
+
+        // Reverse: thrusters at -25% back the ship up at a quarter of their top speed.
+        ship.setTier(0);
+        run(ship, bodies, 10);
+        CHECK_MSG(ship.speed < 0 && std::fabs(ship.speed + 0.25 * ship.topSpeed()) < 0.01, std::to_string(ship.speed));
+
+        ship.allStop();
+        CHECK(ship.throttle() == 0 && !ship.autopilot());
+
+        CHECK(!ship.engageAutopilot(true));  // no target
+        ship.setTarget(1);
+        CHECK(ship.engageAutopilot(true) && ship.autopilot());
+        ship.setTarget(-1);
+        CHECK(!ship.autopilot());
+
+        // Any stick input takes control back.
+        ship.setTarget(1);
+        ship.engageAutopilot(true);
+        FlightControls stick;
+        stick.yaw = 0.01;
+        ship.step(kDt, stick, bodies);
+        CHECK(!ship.autopilot());
+
+        // A target with no position at this date cannot be flown to.
+        bodies[1].present = false;
+        ship.engageAutopilot(true);
+        ship.step(kDt, {}, bodies);
+        CHECK(!ship.autopilot());
+    }
+
     SECTION("autopilot: from 1.5 au away, arrives and stops at the standoff from Mars");
     {
         std::vector<FlightBody> bodies = world();
