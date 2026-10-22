@@ -87,6 +87,7 @@ ctest --test-dir build --output-on-failure
 ./build/orrery --headless --date 2026-10-18 --screenshot out.png          # one frame, no window
 ./build/orrery --headless --frames out/ --count 120 --step 3              # frames for a video
 ./build/orrery --date 2026-10-18 --export-usda solar-system.usda           # an OpenUSD layer
+./build/orrery --focus Earth --enlarge 1 --ship --target Mars --autopilot   # fly from Earth to Mars
 ```
 
 The browser build (Emscripten, WebGL 2) is described in
@@ -110,6 +111,7 @@ On a machine with no GPU, set `LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe`.
 | left-drag | orbit the focused body |
 | wheel, `PgUp` / `PgDn` | zoom |
 | `F` | free flight: `W A S D` to move, `Q` / `E` down / up, drag to look; `F` again to return to orbit |
+| `V` | fly the ship ([below](#the-ship)); `V` again to return to orbit around its target |
 | `M` | TRUE / COMPRESSED scale |
 | `[` / `]` | body enlargement in TRUE mode |
 | `O` `L` `B` `X` | orbits, labels, small bodies, spin axes |
@@ -124,6 +126,46 @@ The text at the top left shows the following:
 - the scale mode.
 - facts about the focused body: radius, rotation period, axial tilt (from the IAU pole and the current orbit), distance from the Sun and from its parent, and where its position comes from.
 - a warning when a body is outside its data, either extrapolated or with no trajectory at that date.
+
+## The ship
+
+<p align="center">
+  <img src="docs/media/ship.gif" width="640" alt="The ship on autopilot from near Earth to Mars at true scale: it climbs to warp 3, is mass locked by Mars's moons and drops back to warp 1, and stops a few Mars radii out as Mars fills the view">
+</p>
+
+*On autopilot from near Earth to Mars at true scale, about 25 seconds of
+flight: `--focus Earth --enlarge 1 --ship --target Mars --autopilot`.*
+
+`V` puts you in a ship where the camera is, as in Rodina: one continuous
+space from a moon's surface to the Kuiper belt, crossed by stepping the drive
+up through speed tiers.
+
+| Drive | Top speed | Earth to Mars (0.5 au) |
+|---|---|---|
+| thrusters | 2 km/s | 1 year |
+| cruise | 200 km/s | 4 days |
+| warp 1 | 1 c (299,792 km/s) | 4 minutes |
+| warp 2 | 50 c | 5 seconds |
+| warp 3 | 2,000 c | a moment; Neptune in 8 seconds |
+
+- **Mass lock.** Heading toward a body, the drive covers at most 60% of the remaining distance to its surface each second. The ship slows down by itself on approach and never flies through a planet. The HUD names the body holding it back. Thrusters are never locked, so you can always set down on a surface.
+- **Moving with a body.** Near a planet or moon, the ship moves with it as time runs, so a planet does not leave you behind at 30 km/s. The HUD shows which body you are moving with.
+- **Size.** The ship is 1/100 of its altitude long, never under 10 m. It and its camera fit at every scale, from Phobos's surface to the outer planets. The space dust streaking past is sized the same way, so it always shows how fast you are moving relative to what is near.
+- **The target** is the focused body: `Tab` and `0`–`9` choose it. Green brackets mark it, an arrow at the edge of the screen points to it when it is off screen, and the HUD gives its distance and an ETA at the current speed.
+- **Autopilot** (`T`) turns the ship to the target, picks the drive and throttle, and stops a few radii out. Any stick or throttle input takes back control.
+- In TRUE mode, speeds and distances are real (the drawn kilometres are kilometres). In COMPRESSED mode they are of the compressed drawing, and the HUD says so. Time keeps running at the chosen rate; `Space` pauses it while you keep flying.
+
+| Key | Action |
+|---|---|
+| `W` / `S` | throttle up / down (down past zero is reverse, up to 25%) |
+| wheel, `PgUp` / `PgDn` | drive tier up / down |
+| left-drag, arrows, `A` / `D` | pitch and yaw |
+| `Q` / `E` | roll left / right |
+| `Tab`, `0`–`9`, `Home` | choose the target |
+| `T` | autopilot to the target, on / off |
+| `Z` | all stop |
+| `C` | chase camera / cockpit |
+| `V` | leave the ship |
 
 ## What is drawn, and from what
 
@@ -244,6 +286,7 @@ it directly; CI checks it with OpenUSD (`usd-core`).
 - **Two-body small bodies.** Small bodies are propagated two-body from a single 2026 epoch (see Accuracy).
 - **UTC before 1972** uses TAI − UTC = 10 s, which is an approximation.
 - **Plain labels.** Labels are skipped where they would overlap, and the font is ASCII only.
+- **An arcade ship.** The ship's velocity follows its nose; there is no gravity, orbit or inertia. It stops at the surfaces of the Sun, planets, moons and dwarf planets, and flies through asteroids, comets and spacecraft. Autopilot flies straight at the target and does not steer around a body in the way: mass lock slows it, and it stops at that body's surface.
 - **Depth precision.** A deep near-to-far range is unavoidable. Far spheres can fall beyond the far plane, but their point markers still show them.
 
 ## Licence

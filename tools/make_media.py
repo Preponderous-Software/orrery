@@ -4,7 +4,7 @@
     LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe \\
         uv run --python 3.12 --with pillow==11.0.0 tools/make_media.py build/orrery
 
-Writes docs/media/*.png and docs/media/hero.gif. Every image is a plain
+Writes docs/media/*.png, docs/media/hero.gif, earth_day.gif and ship.gif. Every image is a plain
 `orrery --headless` run; the command for each is printed.
 """
 from __future__ import annotations
@@ -76,6 +76,24 @@ def main() -> int:
         frames = [im.quantize(palette=palette, dither=Image.Dither.NONE) for im in rgb]
         out = MEDIA / "earth_day.gif"
         frames[0].save(out, save_all=True, append_images=frames[1:], duration=120, loop=0, optimize=True)
+        print(f"wrote {out} ({out.stat().st_size / 1e6:.2f} MB, {len(frames)} frames)")
+
+    # The ship on autopilot from near Earth to Mars, 1/30 s of flight per
+    # rendered frame and every fifth frame kept: up through the drive tiers,
+    # mass locked by Mars's moons, stopping a few Mars radii out.
+    with tempfile.TemporaryDirectory() as tmp:
+        run(binary, ["--date", "2026-10-18", "--focus", "Earth", "--enlarge", "1", "--ship", "--target", "Mars",
+                     "--autopilot", "--no-small-bodies", "--frames", tmp, "--count", "760", "--step", "0"],
+            size=(640, 360))
+        rgb = [Image.open(p).convert("RGB") for p in sorted(Path(tmp).glob("frame_*.png"))[::5]]
+        strip = Image.new("RGB", (rgb[0].width, rgb[0].height * 3))
+        for k, im in enumerate((rgb[0], rgb[len(rgb) // 2], rgb[-1])):
+            strip.paste(im, (0, k * rgb[0].height))
+        palette = strip.quantize(colors=64, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+        frames = [im.quantize(palette=palette, dither=Image.Dither.NONE) for im in rgb]
+        frames += [frames[-1]] * 12  # hold on the arrival
+        out = MEDIA / "ship.gif"
+        frames[0].save(out, save_all=True, append_images=frames[1:], duration=80, loop=0, optimize=True)
         print(f"wrote {out} ({out.stat().st_size / 1e6:.2f} MB, {len(frames)} frames)")
     return 0
 

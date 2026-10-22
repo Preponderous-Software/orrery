@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "orrery/flight.hpp"
 #include "orrery/scale.hpp"
 #include "orrery/system.hpp"
 #include "strata/strata.hpp"
@@ -12,12 +13,15 @@
 namespace orrery {
 
 struct CameraState {
-    int focus = 0;          // body index the camera orbits (ignored in free flight)
+    int focus = 0;          // body index the camera orbits (ignored in free flight; the target in the ship)
     bool freeFly = false;
+    bool ship = false;      // ship mode: eye, look and up are the ship camera's, set by the app
     double yawDeg = -60;    // around ecliptic north
     double pitchDeg = 25;   // above the ecliptic
     double distance = 0;    // drawn km from the focus; 0 = pick a default on the next frame
-    Vec3 eye;               // free flight: drawn position
+    Vec3 eye;               // free flight and ship: drawn position
+    Vec3 look{1, 0, 0}, up{0, 0, 1};  // ship: unit view direction and camera up
+    double nearLimit = 0;   // > 0: the near plane is at most this far (the ship in front of the camera)
     double fovYDeg = 50;
 };
 
@@ -33,11 +37,13 @@ struct ViewOptions {
     bool keyHints = true;   // the HUD's bottom line of keys (off on touch screens)
     std::string timeLine;   // set by the app: date and rate
     std::string prompt;     // set by the app: date entry, or empty
+    const Ship* ship = nullptr;  // ship mode: drawn and reported on
+    bool cockpit = false;        // ship mode: from the cockpit, so the ship itself is not drawn
 };
 
 // What the frame drew, for tests and the HUD.
 struct FrameReport {
-    int spheres = 0, points = 0, lineVertices = 0, labels = 0;
+    int spheres = 0, points = 0, lineVertices = 0, labels = 0, shipTriangles = 0;
 };
 
 class Renderer {
@@ -57,6 +63,8 @@ public:
     // The camera's eye in drawn space.
     Vec3 eyeOf(const CameraState& cam) const;
     Vec3 forwardOf(const CameraState& cam) const;
+    // Every body as the ship sees it: drawn centre, surface and influence.
+    std::vector<FlightBody> flightBodies(const SystemState& state) const;
 
     FrameReport draw(const SystemState& state, const CameraState& cam, const ViewOptions& view, int width,
                      int height);
@@ -67,7 +75,13 @@ private:
     void addRings(int planet, const SystemState& state, const Scale& scale, const Vec3& origin);
     // Places (or hides) a textured body's sphere; false when the body has none.
     bool placeTextured(size_t body, const SystemState& state, const Vec3& origin);
+    void addShip(const Ship& ship, const Vec3& origin);
+    void addDust(const Ship& ship, const Vec3& origin);
+    void addTargetMarker(int body, const CameraState& cam, const Vec3& origin, int width, int height);
+    // Pixel position of a camera-relative point; false behind the camera.
+    bool project(const Vec3& rel, int width, int height, float& sx, float& sy, float& clipW) const;
     void text(float x, float y, float size, const float color[4], const std::string& s);
+    void flightHud(const SystemState& state, const CameraState& cam, const ViewOptions& view, int width, int height);
     void hud(const SystemState& state, const CameraState& cam, const ViewOptions& view, int width, int height);
 
     strata::Engine& engine_;
@@ -76,6 +90,7 @@ private:
     std::vector<double> drawnRadius_;
     std::vector<Vec3> drawnSmall_;
 
+    StrataCamera camera_{};
     std::vector<StrataRenderItem> items_;
     std::vector<StrataPoint> points_;
     std::vector<StrataLineVertex> lines_;
