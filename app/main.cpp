@@ -306,6 +306,7 @@ struct Interactive {
     std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
     int shot = 0;
     long frames = 0;
+    double stickX = 0, stickY = 0;  // the page's thumb stick, -1..1 (right, up)
     FrameReport report;
     std::string status;  // orrery_status(): JSON for the page
 
@@ -501,6 +502,9 @@ struct Interactive {
             c.pitch += (keys[kUp] ? turn : 0.0) - (keys[kDown] ? turn : 0.0);
             c.yaw += (keys[kRight] || keys[kD] ? turn : 0.0) - (keys[kLeft] || keys[kA] ? turn : 0.0);
             c.roll += (keys[kE] ? roll : 0.0) - (keys[kQ] ? roll : 0.0);
+            // The stick turns at up to the keys' rate, gently near its centre.
+            c.yaw += stickX * std::fabs(stickX) * turn;
+            c.pitch += stickY * std::fabs(stickY) * turn;
         }
         w->shipDt = dt;
         if (cam.freeFly) {
@@ -529,12 +533,15 @@ struct Interactive {
 
     const char* statusJson() {
         const Body& b = w->sys->bodies()[static_cast<size_t>(w->cam.focus)];
-        char buf[768];
+        const Ship& ship = w->ship;
+        char buf[1024];
         std::snprintf(buf, sizeof buf,
                       "{\"frames\":%ld,\"focus\":%d,\"focusName\":\"%s\",\"freeFly\":%s,\"paused\":%s,"
                       "\"rate\":\"%s\",\"date\":\"%s\",\"mode\":\"%s\",\"width\":%d,\"height\":%d,"
                       "\"spheres\":%d,\"points\":%d,\"lineVertices\":%d,\"labelCount\":%d,"
-                      "\"labels\":%s,\"orbits\":%s,\"help\":%s,\"firstDate\":\"%s\",\"lastDate\":\"%s\"}",
+                      "\"labels\":%s,\"orbits\":%s,\"help\":%s,\"firstDate\":\"%s\",\"lastDate\":\"%s\","
+                      "\"ship\":%s,\"drive\":\"%s\",\"throttle\":%.3f,\"speed\":%.6g,\"autopilot\":%s,"
+                      "\"cockpit\":%s,\"shipTriangles\":%d,\"stickX\":%.3f,\"stickY\":%.3f}",
                       frames, w->cam.focus, b.name.c_str(), w->cam.freeFly ? "true" : "false",
                       paused ? "true" : "false", rateText(kRates[rateIndex], paused).c_str(),
                       formatIsoDate(calendarDate(tdbToUtc(w->jd))).c_str(),
@@ -543,7 +550,9 @@ struct Interactive {
                       w->view.labels ? "true" : "false", w->view.orbits ? "true" : "false",
                       w->view.help ? "true" : "false",
                       formatIsoDate(calendarDate(tdbToUtc(w->sys->firstJd()))).c_str(),
-                      formatIsoDate(calendarDate(tdbToUtc(w->sys->lastJd()))).c_str());
+                      formatIsoDate(calendarDate(tdbToUtc(w->sys->lastJd()))).c_str(), w->cam.ship ? "true" : "false",
+                      kDriveTiers[ship.tier()].name, ship.throttle(), ship.speed, ship.autopilot() ? "true" : "false",
+                      w->view.cockpit ? "true" : "false", report.shipTriangles, stickX, stickY);
         status = buf;
         return status.c_str();
     }
@@ -579,6 +588,25 @@ EMSCRIPTEN_KEEPALIVE void orrery_zoom(double factor) {
 }
 EMSCRIPTEN_KEEPALIVE void orrery_key(int scancode, int shift) {
     if (gLive) gLive->key(scancode, shift != 0);
+}
+// Holds a key down or lets it go, as a held keyboard key: the ship's touch pad
+// (throttle and roll) uses it.
+EMSCRIPTEN_KEEPALIVE void orrery_hold_key(int scancode, int down) {
+    if (gLive && scancode >= 0 && scancode < 512) gLive->keys[scancode] = down != 0;
+}
+// The ship's thumb stick, -1..1 each way (x right, y up): it steers for as
+// long as it is held off centre; the page sends 0, 0 when it is let go.
+EMSCRIPTEN_KEEPALIVE void orrery_stick(double x, double y) {
+    if (!gLive || !std::isfinite(x) || !std::isfinite(y)) return;
+    gLive->stickX = std::clamp(x, -1.0, 1.0);
+    gLive->stickY = std::clamp(y, -1.0, 1.0);
+}
+// The ship's throttle lever: sets the throttle (-0.25..1) and takes control
+// back from the autopilot.
+EMSCRIPTEN_KEEPALIVE void orrery_throttle(double throttle) {
+    if (!gLive || !std::isfinite(throttle)) return;
+    gLive->w->ship.engageAutopilot(false);
+    gLive->w->ship.setThrottle(throttle);
 }
 EMSCRIPTEN_KEEPALIVE void orrery_focus(int body) {
     if (gLive) gLive->focus(body);
