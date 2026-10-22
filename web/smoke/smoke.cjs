@@ -7,8 +7,8 @@
 // asteroids and labels, and lit pixels on screen), that a drag orbits the
 // camera, that zooming works (the wheel on the desktop, a two-finger pinch on
 // the phone) and that the toolbar changes the focus. Then it boards the ship
-// from the toolbar and flies it with the touch pad (a held throttle button, a
-// drive button) and leaves again. Screenshots go to OUT_DIR.
+// from the toolbar and flies it with the on-screen controls (the throttle lever,
+// the stick, a drive button, Land and Stop) and leaves again. Screenshots go to OUT_DIR.
 // --phone uses Playwright's iPhone 13 profile (touch, 390x664, DPR 3).
 const fs = require('fs');
 const path = require('path');
@@ -215,6 +215,13 @@ async function shot(page, name) {
     const steering = await drag([sx, sy], [sx + 60, sy], 400);
     check(steering.stickX > 0.5, `the stick held right steers (stick x ${steering.stickX})`);
     check((await status()).stickX === 0, 'let go, the stick centres');
+    // Land: the landing autopilot takes the ship down to the target; Stop hands it back.
+    await page.locator('#land').click();
+    await page.waitForFunction(() => window.orrery.status().landing === true, null, { timeout: 10000 });
+    check(await page.locator('#land').getAttribute('aria-pressed') === 'true', 'Land starts the landing autopilot');
+    await page.locator('#stop').click();
+    await page.waitForFunction(() => window.orrery.status().landing === false, null, { timeout: 10000 });
+    check(true, 'Stop ends it');
 
     await page.evaluate(() => window.orrery.hold(1));
     await page.waitForTimeout(200);

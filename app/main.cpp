@@ -9,8 +9,8 @@
 //
 // View options: --yaw DEG --pitch DEG --distance-au AU (drawn), --no-labels, --no-orbits,
 // --no-small-bodies, --no-hud, --axes. Ship: --ship [--drive 1-5] [--throttle F] [--cockpit]
-// [--target NAME [--autopilot]] starts in the ship where the orbit camera would be (with --frames
-// it flies 1/30 s per frame).
+// [--target NAME [--autopilot | --land]] starts in the ship where the orbit camera would be (with
+// --frames it flies 1/30 s per frame).
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -48,7 +48,7 @@ namespace {
 
 // SDL3 scancodes (USB HID usage ids), as Strata reports them.
 enum Key {
-    kA = 4, kB = 5, kC = 6, kD = 7, kE = 8, kF = 9, kH = 11, kJ = 13, kL = 15, kM = 16, kN = 17, kO = 18, kP = 19,
+    kA = 4, kB = 5, kC = 6, kD = 7, kE = 8, kF = 9, kG = 10, kH = 11, kJ = 13, kL = 15, kM = 16, kN = 17, kO = 18, kP = 19,
     kQ = 20, kS = 22, kT = 23, kU = 24, kV = 25, kW = 26, kX = 27, kZ = 29, k1 = 30, k0 = 39, kReturn = 40,
     kEscape = 41, kBackspace = 42, kTab = 43,
     kSpace = 44, kLeftBracket = 47, kRightBracket = 48, kComma = 54, kPeriod = 55, kHome = 74, kPageUp = 75,
@@ -77,7 +77,7 @@ struct Args {
     double yawStep = 0.0;   // degrees per frame
     double yaw = -60, pitch = 25, distanceAu = 0;
     bool labels = true, orbits = true, smallBodies = true, hud = true, axes = false;
-    bool ship = false, cockpit = false, autopilot = false;
+    bool ship = false, cockpit = false, autopilot = false, land = false;
     std::string target;     // ship: the target, if not --focus
     int drive = 1;          // 1 = thrusters .. 5 = warp 3
     double throttle = 0;
@@ -89,7 +89,7 @@ int usage() {
         "              [--enlarge K] [--rate DAYS_PER_SECOND] [--width W] [--height H]\n"
         "              [--yaw DEG] [--pitch DEG] [--distance-au AU] [--no-labels] [--no-orbits]\n"
         "              [--no-small-bodies] [--no-hud] [--axes]\n"
-        "              [--ship [--drive 1-5] [--throttle F] [--cockpit] [--target NAME [--autopilot]]]\n"
+        "              [--ship [--drive 1-5] [--throttle F] [--cockpit] [--target NAME [--autopilot | --land]]]\n"
         "       orrery --headless ... --screenshot out.png\n"
         "       orrery --headless ... --frames DIR --count N [--step DAYS] [--yaw-step DEG]\n"
         "       orrery ... --export-usda out.usda\n"
@@ -138,11 +138,21 @@ bool parse(int argc, char** argv, Args& a) {
         else if (k == "--cockpit") a.cockpit = true;
         else if (k == "--target") a.target = val();
         else if (k == "--autopilot") a.autopilot = true;
+        else if (k == "--land") a.land = true;
         else if (k == "--drive") a.drive = std::atoi(val().c_str());
         else if (k == "--throttle") a.throttle = std::atof(val().c_str());
         else return false;
     }
     return a.width > 0 && a.height > 0 && a.enlarge >= 1 && a.drive >= 1 && a.drive <= kDriveTierCount;
+}
+
+const char* touchdownName(Touchdown::Grade g) {
+    switch (g) {
+        case Touchdown::Soft: return "soft";
+        case Touchdown::Hard: return "hard";
+        case Touchdown::Crash: return "crash";
+        default: return "none";
+    }
 }
 
 std::string rateText(double rate, bool paused) {
@@ -282,6 +292,7 @@ struct World {
             if (!args.target.empty()) cam.focus = sys->find(args.target);
             ship.setTarget(cam.focus);
             ship.engageAutopilot(args.autopilot);
+            if (args.land) ship.engageLanding(true);
         }
         if (cam.ship) {
             const std::vector<FlightBody> bodies = renderer->flightBodies(state);
@@ -366,7 +377,8 @@ struct Interactive {
         if (cam.ship) {  // ship keys; the rest fall through to the usual ones
             switch (scancode) {
                 case kV: w->disembark(); return;
-                case kT: w->ship.engageAutopilot(!w->ship.autopilot()); return;
+                case kT: w->ship.engageAutopilot(!w->ship.autopilot() || w->ship.landing()); return;
+                case kG: w->ship.engageLanding(!w->ship.landing()); return;
                 case kZ: w->ship.allStop(); return;
                 case kC: view.cockpit = !view.cockpit; return;
                 case kPageUp: drive(1); return;
@@ -541,7 +553,8 @@ struct Interactive {
                       "\"spheres\":%d,\"points\":%d,\"lineVertices\":%d,\"labelCount\":%d,"
                       "\"labels\":%s,\"orbits\":%s,\"help\":%s,\"firstDate\":\"%s\",\"lastDate\":\"%s\","
                       "\"ship\":%s,\"drive\":\"%s\",\"throttle\":%.3f,\"speed\":%.6g,\"autopilot\":%s,"
-                      "\"cockpit\":%s,\"shipTriangles\":%d,\"stickX\":%.3f,\"stickY\":%.3f}",
+                      "\"cockpit\":%s,\"shipTriangles\":%d,\"stickX\":%.3f,\"stickY\":%.3f,"
+                      "\"landing\":%s,\"landed\":%d,\"touchdown\":\"%s\",\"impact\":%.6g}",
                       frames, w->cam.focus, b.name.c_str(), w->cam.freeFly ? "true" : "false",
                       paused ? "true" : "false", rateText(kRates[rateIndex], paused).c_str(),
                       formatIsoDate(calendarDate(tdbToUtc(w->jd))).c_str(),
@@ -552,7 +565,9 @@ struct Interactive {
                       formatIsoDate(calendarDate(tdbToUtc(w->sys->firstJd()))).c_str(),
                       formatIsoDate(calendarDate(tdbToUtc(w->sys->lastJd()))).c_str(), w->cam.ship ? "true" : "false",
                       kDriveTiers[ship.tier()].name, ship.throttle(), ship.speed, ship.autopilot() ? "true" : "false",
-                      w->view.cockpit ? "true" : "false", report.shipTriangles, stickX, stickY);
+                      w->view.cockpit ? "true" : "false", report.shipTriangles, stickX, stickY,
+                      ship.landing() ? "true" : "false", ship.landed(), touchdownName(ship.touchdown().grade),
+                      ship.touchdown().impactKmPerS);
         status = buf;
         return status.c_str();
     }

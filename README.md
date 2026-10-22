@@ -89,6 +89,7 @@ ctest --test-dir build --output-on-failure
 ./build/orrery --headless --frames out/ --count 120 --step 3              # frames for a video
 ./build/orrery --date 2026-10-18 --export-usda solar-system.usda           # an OpenUSD layer
 ./build/orrery --focus Earth --enlarge 1 --ship --target Mars --autopilot   # fly from Earth to Mars
+./build/orrery --focus Moon --enlarge 1 --ship --target Moon --land         # land on the Moon
 ```
 
 The browser build (Emscripten, WebGL 2) is described in
@@ -149,11 +150,21 @@ up through speed tiers.
 | warp 2 | 50 c | 5 seconds |
 | warp 3 | 2,000 c | a moment; Neptune in 8 seconds |
 
-- **Mass lock.** Heading toward a body, the drive covers at most 60% of the remaining distance to its surface each second. The ship slows down by itself on approach and never flies through a planet. The HUD names the body holding it back. Thrusters are never locked, so you can always set down on a surface.
+- **Mass lock.** Heading toward a body, the drive covers at most 60% of the remaining distance to its surface each second. The ship slows down by itself on approach and never flies through a planet. The HUD names the body holding it back. Under any drive above thrusters, the lock brings the ship down onto a surface at a gentle 50 m/s. Thrusters are never locked, so on thrusters the landing is up to you.
 - **Moving with a body.** Near a planet or moon, the ship moves with it as time runs, so a planet does not leave you behind at 30 km/s. The HUD shows which body you are moving with.
 - **Size.** The ship is 1/100 of its altitude long, never under 10 m. It and its camera fit at every scale, from Phobos's surface to the outer planets. The space dust streaking past is sized the same way, so it always shows how fast you are moving relative to what is near.
 - **The target** is the focused body: `Tab` and `0`–`9` choose it. Green brackets mark it, an arrow at the edge of the screen points to it when it is off screen, and the HUD gives its distance and an ETA at the current speed.
-- **Autopilot** (`T`) turns the ship to the target, picks the drive and throttle, and stops a few radii out. Any stick or throttle input takes back control.
+- **Autopilot** (`T`) turns the ship to the target, picks the drive and throttle, and stops a few radii out. From a surface it first climbs straight up. Any stick or throttle input takes back control.
+- **Landing.** The speed into the surface at touchdown grades the landing: up to 120 m/s is a landing, up to 600 m/s a hard landing, and anything faster a crash. These are game thresholds; on thrusters a landing is under 6% throttle. A landed ship sits level and turns with the body as it rotates (from its IAU rotation elements). The throttle alone does not move it: pitch the nose up and throttle to lift off. A crash puts the ship back a quarter of a radius above the surface, at rest and pointing up. The HUD shows the climb or descent rate near a surface.
+- **Landing autopilot** (`G`) flies to the target and sets down softly on it, climbing out first when it starts from another surface.
+
+<p align="center">
+  <img src="docs/media/landing.gif" width="640" alt="The landing autopilot taking the ship from 20,000 km out down to the Moon's surface: the Moon grows to fill the view, the drive steps down from warp 1 through cruise to thrusters, and the ship lands at about 33 m/s and sits level with the horizon ahead">
+</p>
+
+*The landing autopilot from 20,000 km out to the Moon's surface, about 20
+seconds of flight: `--date 2026-11-24 --focus Moon --enlarge 1 --ship --target Moon --land`.*
+
 - In TRUE mode, speeds and distances are real (the drawn kilometres are kilometres). In COMPRESSED mode they are of the compressed drawing, and the HUD says so. Time keeps running at the chosen rate; `Space` pauses it while you keep flying.
 
 | Key | Action |
@@ -164,6 +175,7 @@ up through speed tiers.
 | `Q` / `E` | roll left / right |
 | `Tab`, `0`–`9`, `Home` | choose the target |
 | `T` | autopilot to the target, on / off |
+| `G` | land on the target, on / off |
 | `Z` | all stop |
 | `C` | chase camera / cockpit |
 | `V` | leave the ship |
@@ -230,7 +242,7 @@ The other tests:
 - `test_scale` checks that TRUE mode leaves positions untouched and multiplies radii by exactly the stated factor, and that COMPRESSED mode keeps direction and order. It also checks unit conversions (au, obliquity).
 - `test_rotation` checks the body frames built from the IAU rotation elements: each frame is right-handed and orthonormal with +Z on the pole, W = 0 puts the prime meridian on the ascending node, and Earth's pole is 23.44° from ecliptic north with its prime meridian back in place after one sidereal day.
 - `test_csv` covers the catalogue's CSV reader: comment and blank lines, CRLF line ends, empty cells, the fallback for an empty number, and errors that name the file for a ragged row, a missing header, an unknown column or a cell that is not a number.
-- `test_flight` covers the ship: the drive tiers (warp 1 is the speed of light) and spooling up to warp 3, the controls (tier and throttle limits, reverse, all stop, and autopilot needing a present target and giving way to the stick), mass lock slowing a ship flown at Earth until it settles on the surface, stopping at a surface, moving with a body inside its influence, steering that keeps the ship's axes orthonormal, autopilot arriving at its standoff from Mars, and the ship's size following its altitude.
+- `test_flight` covers the ship: the drive tiers (warp 1 is the speed of light) and spooling up to warp 3, the controls (tier and throttle limits, reverse, all stop, and autopilot needing a present target and giving way to the stick), mass lock bringing a ship flown at Earth at warp down to a soft landing, the three touchdown grades on thrusters (a landed ship sits level; a crash is put back above the surface), lifting off only with the nose up, a landed ship turning with its body, the landing autopilot setting down on the Moon and climbing out from it, moving with a body inside its influence, steering that keeps the ship's axes orthonormal, autopilot arriving at its standoff from Mars, and the ship's size following its altitude.
 - `render_smoke` renders four views headless (three orbit views and one from the ship) and checks that each frame is lit, with the expected numbers of spheres, points, orbit vertices and labels, and that the ship is drawn in the ship view.
 - CI also opens the exported USD layer with OpenUSD (`tests/check_usda.py`).
 - The browser build's CI checks that the DE440s kernel cut for the web gives the same positions as the full kernel, bit for bit (`tests/check_trim_spk.py`; see [web/README.md](web/README.md)).
@@ -290,7 +302,7 @@ it directly; CI checks it with OpenUSD (`usd-core`).
 - **Two-body small bodies.** Small bodies are propagated two-body from a single 2026 epoch (see Accuracy).
 - **UTC before 1972** uses TAI − UTC = 10 s, which is an approximation.
 - **Plain labels.** Labels are skipped where they would overlap, and the font is ASCII only.
-- **An arcade ship.** The ship's velocity follows its nose; there is no gravity, orbit or inertia. It stops at the surfaces of the Sun, planets, moons and dwarf planets, and flies through asteroids, comets and spacecraft. Autopilot flies straight at the target and does not steer around a body in the way: mass lock slows it, and it stops at that body's surface.
+- **An arcade ship.** The ship's velocity follows its nose; there is no gravity, orbit or inertia. It stops and lands at the surfaces of the Sun, planets, moons and dwarf planets, and flies through asteroids, comets and spacecraft. The gas giants and the Sun are treated as solid at their drawn radius, so the ship can "land" on them. Autopilot flies straight at the target and does not steer around a body in the way: mass lock slows it, and it lands on that body.
 - **Depth precision.** A deep near-to-far range is unavoidable. Far spheres can fall beyond the far plane, but their point markers still show them.
 
 ## Licence
