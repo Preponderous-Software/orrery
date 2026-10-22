@@ -713,7 +713,7 @@ int main(int argc, char** argv) {
         view.cockpit = args.cockpit;
         auto frame = [&](const std::string& rate) { return world->frame(rate); };
 
-        // ---- smoke test: three views, each must be visibly drawn
+        // ---- smoke test: four views (the last from the ship), each must be visibly drawn
         if (!args.smokeDir.empty()) {
             std::filesystem::create_directories(args.smokeDir);
             const Smoke views[] = {
