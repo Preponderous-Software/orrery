@@ -10,6 +10,7 @@
 
 #include <vector>
 
+#include "orrery/rotation.hpp"
 #include "orrery/vec.hpp"
 
 namespace orrery {
@@ -36,6 +37,7 @@ struct FlightBody {
     double radius = 0;      // drawn; 0 = no surface (comets, spacecraft)
     double influence = 0;   // the ship moves with the body inside this distance; 0 = never
     bool present = false;   // has a position at this date
+    BodyFrame frame;        // the body's axes at this date; a landed ship turns with them
 };
 
 // This step's stick and throttle input.
@@ -45,8 +47,23 @@ struct FlightControls {
 };
 
 // Mass lock: moving toward a surface, the ship covers at most this fraction
-// of the remaining distance per second. Thrusters are never locked.
+// of the remaining distance per second. Thrusters are never locked; under any
+// bigger drive the lock brings the ship down gently (kLockedFloorKmPerS).
 constexpr double kMassLockPerSecond = 0.6;
+constexpr double kLockedFloorKmPerS = 0.05;
+
+// Touchdown: the speed into the surface at contact grades the landing. These
+// are game thresholds, not physics: on thrusters (2 km/s) a soft landing is
+// under 6% throttle, a crash anything over 30%.
+constexpr double kSoftLandingKmPerS = 0.12;
+constexpr double kHardLandingKmPerS = 0.6;
+
+struct Touchdown {
+    enum Grade { None, Soft, Hard, Crash };
+    Grade grade = None;
+    int body = -1;
+    double impactKmPerS = 0;  // speed into the surface at contact
+};
 
 class Ship {
 public:
@@ -61,9 +78,12 @@ public:
     void setThrottle(double throttle);  // -0.25..1
     double topSpeed() const { return kDriveTiers[tier_].topKmPerS; }
     void allStop() { throttle_ = 0; autopilot_ = false; }
-    // Autopilot flies to the target and stops at a few radii from it.
+    // Autopilot flies to the target and stops at a few radii from it; from a
+    // surface it first climbs straight up.
     void setTarget(int body) { target_ = body; if (body < 0) autopilot_ = false; }
     bool engageAutopilot(bool on);
+    // Landing autopilot: flies to the target and sets down on it softly.
+    bool engageLanding(bool on);
 
     Vec3 position;
     Vec3 forward{1, 0, 0};
@@ -74,14 +94,19 @@ public:
     int tier() const { return tier_; }
     int target() const { return target_; }
     bool autopilot() const { return autopilot_; }
+    bool landing() const { return autopilot_ && landing_; }
     // The ship's length in drawn km. It follows the distance to the nearest
     // surface, so the ship and its camera fit at every scale.
     double size() const { return size_; }
     int anchor() const { return anchor_; }        // the body the ship moves with, or -1
     int nearest() const { return nearest_; }      // closest surface, or -1
     double altitude() const { return altitude_; }  // above that surface
+    double climb() const { return climb_; }        // km/s away from that surface; negative = descending
     int massLock() const { return massLock_; }    // the body holding the drive back, or -1
-    int touched() const { return touched_; }      // the surface the ship last stopped at, or -1
+    int landed() const { return landed_; }        // the body the ship sits on, or -1
+    // The last contact with a surface, kept until the ship next moves (a crash
+    // until it moves again after being put back above the surface).
+    const Touchdown& touchdown() const { return touchdown_; }
     int arrived() const { return arrived_; }      // the target autopilot last reached, or -1
     // Where autopilot stops: a few radii out from the target.
     static double standoff(const FlightBody& b);
@@ -90,6 +115,7 @@ private:
     void ride(const std::vector<FlightBody>& bodies);
     void turn(double pitch, double yaw, double roll);
     void fly(double dt, const std::vector<FlightBody>& bodies);
+    void contact(int body, const FlightBody& b, const Vec3& out);
 
     double throttle_ = 0;  // -0.25..1 of the tier's top speed
     int tier_ = 0;
@@ -100,7 +126,13 @@ private:
     Vec3 anchorAt_;  // the anchor's centre when last seen
     int nearest_ = -1;
     double altitude_ = 0;
-    int massLock_ = -1, touched_ = -1, arrived_ = -1;
+    bool landing_ = false;
+    int climbFrom_ = -1;  // autopilot: the surface it is climbing away from
+    double climb_ = 0;
+    int massLock_ = -1, landed_ = -1, arrived_ = -1;
+    Touchdown touchdown_;
+    // While landed: the ship in its body's axes, so it turns with the body.
+    Vec3 localPos_, localForward_, localUp_;
 };
 
 }  // namespace orrery

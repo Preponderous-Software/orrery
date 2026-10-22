@@ -62,6 +62,16 @@ std::string speedText(double kmPerS) {
     return s + buf;
 }
 
+// Touchdown and climb speeds: m/s below 1 km/s.
+std::string verticalText(double kmPerS) {
+    char buf[64];
+    const double a = std::fabs(kmPerS);
+    if (a < 1) std::snprintf(buf, sizeof buf, "%.0f m/s", a * 1000);
+    else if (a < 10) std::snprintf(buf, sizeof buf, "%.2f km/s", a);
+    else return thousands(a) + " km/s";
+    return buf;
+}
+
 std::string durationText(double s) {
     char buf[64];
     if (s < 60) std::snprintf(buf, sizeof buf, "%.0f s", s);
@@ -75,6 +85,7 @@ constexpr float kWhite[4] = {1, 1, 1, 1};
 constexpr float kDim[4] = {0.75f, 0.78f, 0.85f, 1};
 constexpr float kWarn[4] = {1.0f, 0.75f, 0.35f, 1};
 constexpr float kGo[4] = {0.45f, 1.0f, 0.6f, 1};
+constexpr float kAlarm[4] = {1.0f, 0.42f, 0.38f, 1};
 
 }  // namespace
 
@@ -251,6 +262,7 @@ std::vector<FlightBody> Renderer::flightBodies(const SystemState& state) const {
         fb.centre = drawn_[i];
         fb.radius = drawnRadius_[i];
         fb.present = state.valid[i];
+        sys_.frame(static_cast<int>(i), state.jdTdb, fb.frame);  // a landed ship turns with its body
         // The Sun holds everything; a planet its moon system; a moon a few radii.
         if (i == 0) {
             fb.influence = std::numeric_limits<double>::infinity();
@@ -704,7 +716,8 @@ FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, con
             addShip(*view.ship, origin);
             report.shipTriangles = static_cast<int>((meshIndices_.size() - before) / 3);
         }
-        if (cam.focus >= 0 && state.valid[static_cast<size_t>(cam.focus)]) {
+        // No marker for the body the ship sits on: it would point at its centre, under the HUD.
+        if (cam.focus >= 0 && state.valid[static_cast<size_t>(cam.focus)] && cam.focus != view.ship->landed()) {
             addTargetMarker(cam.focus, cam, origin, width, height);
         }
     }
@@ -868,15 +881,20 @@ void Renderer::flightHud(const SystemState& state, const CameraState& cam, const
     put(buf, kWhite, big);
     y += big + 6;
 
-    // What is happening: autopilot, mass lock, landed, arrived.
+    // What is happening: autopilot, mass lock, touchdown, arrived.
     auto name = [&](int i) { return bodies[static_cast<size_t>(i)].name; };
     x = 10;
-    if (ship.autopilot()) put("AUTOPILOT to " + name(ship.target()), kGo, big);
+    if (ship.autopilot()) put((ship.landing() ? "LANDING on " : "AUTOPILOT to ") + name(ship.target()), kGo, big);
+    const Touchdown& td = ship.touchdown();
     if (ship.massLock() >= 0) {
         if (ship.autopilot()) put("   ", kDim, big);
         put("MASS LOCK: " + name(ship.massLock()) + " holds the drive", kWarn, big);
-    } else if (ship.touched() >= 0) {
-        put("LANDED on " + name(ship.touched()), kGo, big);
+    } else if (td.grade == Touchdown::Soft) {
+        put("LANDED on " + name(td.body) + "  " + verticalText(td.impactKmPerS), kGo, big);
+    } else if (td.grade == Touchdown::Hard) {
+        put("HARD LANDING on " + name(td.body) + "  " + verticalText(td.impactKmPerS), kWarn, big);
+    } else if (td.grade == Touchdown::Crash) {
+        put("CRASHED into " + name(td.body) + " at " + verticalText(td.impactKmPerS), kAlarm, big);
     } else if (ship.arrived() >= 0) {
         put("ARRIVED at " + name(ship.arrived()), kGo, big);
     }
@@ -885,13 +903,13 @@ void Renderer::flightHud(const SystemState& state, const CameraState& cam, const
     // TARGET Mars  0.512 au  ETA 4 min 13 s
     x = 10;
     if (cam.focus >= 0 && state.valid[static_cast<size_t>(cam.focus)]) {
-        const FlightBody target{drawn_[static_cast<size_t>(cam.focus)], drawnRadius_[static_cast<size_t>(cam.focus)], 0, true};
+        const FlightBody target{drawn_[static_cast<size_t>(cam.focus)], drawnRadius_[static_cast<size_t>(cam.focus)], 0, true, {}};
         const Vec3 rel = target.centre - ship.position;
         const double dist = length(rel);
         put("TARGET ", kDim, big);
         put(name(cam.focus) + "  " + distanceText(dist), kWhite, big);
         const double closing = dist > 0 ? ship.speed * dot(ship.forward, rel / dist) : 0;
-        const double remaining = dist - Ship::standoff(target);
+        const double remaining = dist - (ship.landing() ? target.radius : Ship::standoff(target));
         if (closing > 0 && remaining > 0) put("   ETA " + durationText(remaining / closing), kWhite, big);
     } else {
         put("no target: Tab or 0-9 picks one", kDim, big);
@@ -900,6 +918,13 @@ void Renderer::flightHud(const SystemState& state, const CameraState& cam, const
 
     std::string near;
     if (ship.nearest() >= 0) near = "nearest surface: " + name(ship.nearest()) + ", " + distanceText(ship.altitude());
+    if (ship.landed() >= 0) {
+        near = "on " + name(ship.landed()) + ": nose up and throttle to lift off";
+    } else if (td.grade == Touchdown::Crash) {
+        near += "   the ship was put back above the surface";
+    } else if (ship.nearest() >= 0 && ship.climb() != 0) {
+        near += (ship.climb() < 0 ? "   descending " : "   climbing ") + verticalText(ship.climb());
+    }
     if (ship.anchor() > 0) near += "   moving with " + name(ship.anchor());
     if (view.scale.mode == ScaleMode::Compressed) near += "   (speeds and distances are of the COMPRESSED drawing)";
     text(10, y, small, kDim, near);
@@ -990,7 +1015,7 @@ void Renderer::hud(const SystemState& state, const CameraState& cam, const ViewO
     if (view.keyHints) {
         text(10, static_cast<float>(height) - 14 - small, small, kDim,
              view.ship ? "W/S throttle   wheel drive   drag/arrows/A D steer   Q/E roll   Tab target   T autopilot   "
-                         "Z stop   C view   V leave"
+                         "G land   Z stop   C view   V leave"
                        : "H help   Tab next body   M scale mode   Space pause   V ship");
     }
 
@@ -1003,7 +1028,7 @@ void Renderer::hud(const SystemState& state, const CameraState& cam, const ViewO
             "Home         the Sun",
             "Left drag    orbit the focus          Wheel, PgUp/PgDn  zoom",
             "F            free flight: WASD move, Q/E down/up, drag to look",
-            "V            ship: W/S throttle, wheel drive tier, T autopilot",
+            "V            ship: W/S throttle, wheel drive tier, T autopilot, G land",
             "M            TRUE / COMPRESSED scale",
             "[ ]          body enlargement (TRUE mode)",
             "O  L  B  X   orbits, labels, small bodies, spin axes",
