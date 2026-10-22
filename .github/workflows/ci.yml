@@ -72,7 +72,7 @@ jobs:
       - name: Build
         run: cmake --build build -j4
 
-      - name: Tests (time, Kepler, scale, ephemeris vs Horizons, headless render smoke test)
+      - name: Tests (time, Kepler, scale, flight, ephemeris vs Horizons, headless render smoke test)
         run: ctest --test-dir build --output-on-failure
 
       - name: USD export opens in OpenUSD

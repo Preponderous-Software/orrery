@@ -3,7 +3,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdint>
+#include <cctype>
 #include <cstring>
+#include <limits>
 
 #include "orrery/time.hpp"
 #include "image_file.hpp"
@@ -39,9 +42,39 @@ void basis(const Vec3& n, Vec3& u, Vec3& v) {
     v = cross(n, u);
 }
 
+std::string distanceText(double km) {
+    if (km < 1e7) return thousands(km) + " km";
+    char buf[64];
+    std::snprintf(buf, sizeof buf, "%.3f au", km / kAuKm);
+    return buf;
+}
+
+std::string speedText(double kmPerS) {
+    const double a = std::fabs(kmPerS);
+    char buf[96];
+    if (a < 10) std::snprintf(buf, sizeof buf, "%.2f km/s", kmPerS);
+    else std::snprintf(buf, sizeof buf, "%s km/s", thousands(kmPerS).c_str());
+    std::string s = buf;
+    const double c = a / kLightKmPerS;
+    if (c >= 10) std::snprintf(buf, sizeof buf, "  (%s c)", thousands(c).c_str());
+    else if (c >= 0.01) std::snprintf(buf, sizeof buf, "  (%.2f c)", c);
+    else buf[0] = 0;
+    return s + buf;
+}
+
+std::string durationText(double s) {
+    char buf[64];
+    if (s < 60) std::snprintf(buf, sizeof buf, "%.0f s", s);
+    else if (s < 3600) std::snprintf(buf, sizeof buf, "%d min %02d s", static_cast<int>(s / 60), static_cast<int>(s) % 60);
+    else if (s < 86400) std::snprintf(buf, sizeof buf, "%d h %02d min", static_cast<int>(s / 3600), static_cast<int>(s / 60) % 60);
+    else std::snprintf(buf, sizeof buf, "%.1f days", s / 86400);
+    return buf;
+}
+
 constexpr float kWhite[4] = {1, 1, 1, 1};
 constexpr float kDim[4] = {0.75f, 0.78f, 0.85f, 1};
 constexpr float kWarn[4] = {1.0f, 0.75f, 0.35f, 1};
+constexpr float kGo[4] = {0.45f, 1.0f, 0.6f, 1};
 
 }  // namespace
 
@@ -199,14 +232,38 @@ double Renderer::defaultDistance(int body) const {
 }
 
 Vec3 Renderer::forwardOf(const CameraState& cam) const {
+    if (cam.ship) return cam.look;
     const double y = cam.yawDeg * kDegToRad, p = cam.pitchDeg * kDegToRad;
     const Vec3 outward{std::cos(p) * std::cos(y), std::cos(p) * std::sin(y), std::sin(p)};
     return cam.freeFly ? outward : -outward;
 }
 
 Vec3 Renderer::eyeOf(const CameraState& cam) const {
-    if (cam.freeFly) return cam.eye;
+    if (cam.freeFly || cam.ship) return cam.eye;
     return drawn_[static_cast<size_t>(cam.focus)] - forwardOf(cam) * cam.distance;
+}
+
+std::vector<FlightBody> Renderer::flightBodies(const SystemState& state) const {
+    const auto& bodies = sys_.bodies();
+    std::vector<FlightBody> out(bodies.size());
+    for (size_t i = 0; i < bodies.size(); ++i) {
+        FlightBody& fb = out[i];
+        fb.centre = drawn_[i];
+        fb.radius = drawnRadius_[i];
+        fb.present = state.valid[i];
+        // The Sun holds everything; a planet its moon system; a moon a few radii.
+        if (i == 0) {
+            fb.influence = std::numeric_limits<double>::infinity();
+        } else if (fb.radius > 0) {
+            fb.influence = (bodies[i].kind == BodyKind::Moon ? 12 : 25) * fb.radius;
+            for (size_t j = 0; j < bodies.size(); ++j) {
+                if (bodies[j].parent == static_cast<int>(i) && state.valid[j]) {
+                    fb.influence = std::max(fb.influence, 1.3 * length(drawn_[j] - drawn_[i]));
+                }
+            }
+        }
+    }
+    return out;
 }
 
 void Renderer::addLine(const Vec3& a, const Vec3& b, const float color[4], const Vec3& origin) {
@@ -280,6 +337,202 @@ void Renderer::addRings(int planet, const SystemState& state, const Scale& scale
     }
 }
 
+bool Renderer::project(const Vec3& rel, int width, int height, float& sx, float& sy, float& clipW) const {
+    const float* v = camera_.view;
+    const float* pr = camera_.projection;
+    const float in[4] = {f(rel.x), f(rel.y), f(rel.z), 1};
+    float eyeSpace[4] = {0, 0, 0, 0}, clip[4] = {0, 0, 0, 0};
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c) eyeSpace[r] += v[c * 4 + r] * in[c];
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c) clip[r] += pr[c * 4 + r] * eyeSpace[c];
+    if (clip[3] <= 0) return false;
+    sx = (clip[0] / clip[3] * 0.5f + 0.5f) * static_cast<float>(width);
+    sy = (0.5f - clip[1] / clip[3] * 0.5f) * static_cast<float>(height);
+    clipW = clip[3];
+    return true;
+}
+
+// A small delta-winged hull, in lengths of the ship: +x forward, +y left, +z up.
+namespace {
+struct HullFace {
+    int a, b, c;
+    float color[3];
+};
+constexpr double kHull[][3] = {
+    {0.60, 0, 0},         // 0 nose
+    {-0.15, 0, 0.13},     // 1 canopy ridge
+    {-0.20, 0, -0.08},    // 2 keel
+    {-0.50, 0.46, -0.01}, // 3 left wing tip
+    {-0.50, -0.46, -0.01},// 4 right wing tip
+    {-0.50, 0.12, 0.08},  // 5 tail, upper left
+    {-0.50, -0.12, 0.08}, // 6 tail, upper right
+    {-0.50, 0.12, -0.05}, // 7 tail, lower left
+    {-0.50, -0.12, -0.05},// 8 tail, lower right
+    {0.18, 0, 0.075},     // 9 canopy front
+};
+constexpr float kHullGrey[3] = {0.78f, 0.80f, 0.84f};
+constexpr float kHullDark[3] = {0.30f, 0.32f, 0.36f};
+constexpr float kCanopy[3] = {0.12f, 0.30f, 0.55f};
+constexpr float kStripe[3] = {0.75f, 0.22f, 0.16f};
+constexpr HullFace kFaces[] = {
+    {0, 9, 3, {kHullGrey[0], kHullGrey[1], kHullGrey[2]}},
+    {0, 4, 9, {kHullGrey[0], kHullGrey[1], kHullGrey[2]}},
+    {9, 1, 3, {kCanopy[0], kCanopy[1], kCanopy[2]}},
+    {9, 4, 1, {kCanopy[0], kCanopy[1], kCanopy[2]}},
+    {1, 5, 3, {kHullGrey[0], kHullGrey[1], kHullGrey[2]}},
+    {1, 4, 6, {kHullGrey[0], kHullGrey[1], kHullGrey[2]}},
+    {1, 6, 5, {kStripe[0], kStripe[1], kStripe[2]}},
+    {0, 3, 2, {kHullDark[0], kHullDark[1], kHullDark[2]}},
+    {0, 2, 4, {kHullDark[0], kHullDark[1], kHullDark[2]}},
+    {2, 3, 7, {kHullDark[0], kHullDark[1], kHullDark[2]}},
+    {2, 8, 4, {kHullDark[0], kHullDark[1], kHullDark[2]}},
+    {2, 7, 8, {kHullDark[0], kHullDark[1], kHullDark[2]}},
+    {3, 5, 7, {kHullDark[0], kHullDark[1], kHullDark[2]}},
+    {4, 8, 6, {kHullDark[0], kHullDark[1], kHullDark[2]}},
+    {5, 6, 8, {kHullDark[0], kHullDark[1], kHullDark[2]}},
+    {5, 8, 7, {kHullDark[0], kHullDark[1], kHullDark[2]}},
+};
+
+uint64_t mix(uint64_t x) {  // splitmix64
+    x += 0x9E3779B97F4A7C15ull;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
+    return x ^ (x >> 31);
+}
+double unit(uint64_t h, int k) { return static_cast<double>((h >> (k * 16)) & 0xFFFF) / 65536.0; }
+}  // namespace
+
+void Renderer::addShip(const Ship& ship, const Vec3& origin) {
+    const double L = ship.size();
+    const Vec3 left = cross(ship.up, ship.forward);
+    auto place = [&](int k) {
+        return ship.position + ship.forward * (kHull[k][0] * L) + left * (kHull[k][1] * L) + ship.up * (kHull[k][2] * L);
+    };
+    Vec3 centroid;
+    for (int k = 0; k < 10; ++k) centroid += place(k) / 10.0;
+    // Flat shading: three vertices of its own per face, wound to face outward.
+    for (const HullFace& face : kFaces) {
+        Vec3 a = place(face.a), b = place(face.b), c = place(face.c);
+        Vec3 n = normalize(cross(b - a, c - a));
+        if (dot(n, (a + b + c) / 3.0 - centroid) < 0) {
+            std::swap(b, c);
+            n = -n;
+        }
+        const auto base = static_cast<uint32_t>(meshPositions_.size() / 3);
+        for (const Vec3& p : {a, b, c}) {
+            const Vec3 r = p - origin;
+            meshPositions_.insert(meshPositions_.end(), {f(r.x), f(r.y), f(r.z)});
+            meshNormals_.insert(meshNormals_.end(), {f(n.x), f(n.y), f(n.z)});
+            meshColors_.insert(meshColors_.end(), {face.color[0], face.color[1], face.color[2]});
+        }
+        meshIndices_.insert(meshIndices_.end(), {base, base + 1, base + 2});
+    }
+    // Engines: orange on thrusters and cruise, blue-white at warp, brighter with throttle.
+    const double push = std::clamp(std::fabs(ship.throttle()), 0.0, 1.0);
+    const bool warp = ship.tier() >= 2;
+    for (double side : {-1.0, 1.0}) {
+        StrataPoint glow{};
+        setVec(glow.position, ship.position + ship.forward * (-0.52 * L) + left * (0.07 * side * L) +
+                                  ship.up * (0.015 * L) - origin);
+        glow.world_diameter = f(L * (0.08 + 0.22 * push));
+        glow.color[0] = warp ? 0.55f : 1.0f;
+        glow.color[1] = warp ? 0.80f : 0.62f;
+        glow.color[2] = warp ? 1.0f : 0.28f;
+        glow.color[3] = f(0.35 + 0.65 * push);
+        glow.flags = STRATA_POINT_SOFT;
+        points_.push_back(glow);
+    }
+}
+
+void Renderer::addDust(const Ship& ship, const Vec3& origin) {
+    // Motes fixed in the frame of the body the ship moves with, so they stream
+    // past at the ship's own speed. They sit on a lattice sized to the ship;
+    // two neighbouring power-of-two lattices fade into each other as it resizes.
+    const Vec3 base = ship.anchor() >= 0 ? drawn_[static_cast<size_t>(ship.anchor())] : Vec3{};
+    const Vec3 rel = ship.position - base;
+    const double level = std::log2(16 * ship.size());
+    const double low = std::floor(level);
+    const Vec3 velocity = ship.forward * ship.speed;
+    const bool warp = ship.tier() >= 2;
+    for (int step = 0; step < 2; ++step) {
+        const double cell = std::exp2(low + step);
+        const double weight = step == 0 ? 1 - (level - low) : level - low;
+        if (weight < 0.02) continue;
+        const auto cx = static_cast<int64_t>(std::floor(rel.x / cell));
+        const auto cy = static_cast<int64_t>(std::floor(rel.y / cell));
+        const auto cz = static_cast<int64_t>(std::floor(rel.z / cell));
+        for (int64_t dx = -3; dx <= 3; ++dx)
+            for (int64_t dy = -3; dy <= 3; ++dy)
+                for (int64_t dz = -3; dz <= 3; ++dz) {
+                    const uint64_t h = mix(static_cast<uint64_t>(cx + dx) * 73856093ull ^
+                                           static_cast<uint64_t>(cy + dy) * 19349663ull ^
+                                           static_cast<uint64_t>(cz + dz) * 83492791ull ^
+                                           static_cast<uint64_t>(low + step + 1000));
+                    const Vec3 p = Vec3{(static_cast<double>(cx + dx) + unit(h, 0)) * cell,
+                                        (static_cast<double>(cy + dy) + unit(h, 1)) * cell,
+                                        (static_cast<double>(cz + dz) + unit(h, 2)) * cell};
+                    const double fade = 1 - length(p - rel) / (3.5 * cell);
+                    if (fade <= 0) continue;
+                    const float alpha = f(std::min(1.0, 1.3 * fade) * weight);
+                    Vec3 streak = velocity * 0.12;  // where the mote was 120 ms ago, relative to the ship
+                    if (length(streak) > 3 * cell) streak = normalize(streak) * (3 * cell);
+                    const Vec3 at = base + p;
+                    if (length(streak) < 0.03 * cell) {
+                        StrataPoint mote{};
+                        setVec(mote.position, at - origin);
+                        mote.size_pixels = 1.5f;
+                        mote.color[0] = mote.color[1] = mote.color[2] = 0.8f;
+                        mote.color[3] = alpha;
+                        points_.push_back(mote);
+                    } else {
+                        const float color[4] = {warp ? 0.6f : 0.85f, warp ? 0.8f : 0.85f, 1.0f, alpha};
+                        addLine(at, at + streak, color, origin);
+                    }
+                }
+    }
+}
+
+void Renderer::addTargetMarker(int body, const CameraState& cam, const Vec3& origin, int width, int height) {
+    const Vec3 rel = drawn_[static_cast<size_t>(body)] - origin;
+    const Vec3 fwd = cam.look;
+    const Vec3 right = normalize(cross(fwd, cam.up));
+    const Vec3 up = cross(right, fwd);
+    const double depth = dot(rel, fwd);
+    float sx = 0, sy = 0, clipW = 0;
+    const bool onScreen = project(rel, width, height, sx, sy, clipW) && sx >= 0 && sy >= 0 &&
+                          sx <= static_cast<float>(width) && sy <= static_cast<float>(height);
+    const float green[4] = {0.45f, 1.0f, 0.6f, 0.9f};
+    const std::string& name = sys_.bodies()[static_cast<size_t>(body)].name;
+    const float size = width >= 1000 ? 16.0f : 8.0f;
+    if (onScreen && depth > 0) {
+        // Corner brackets around the body, at its distance, never under 18 px.
+        const double perPixel = 2 * depth * std::tan(cam.fovYDeg * kDegToRad / 2) / height;
+        const double half = std::max(drawnRadius_[static_cast<size_t>(body)] * 1.25, 18 * perPixel);
+        const double arm = 0.35 * half;
+        const Vec3 c = drawn_[static_cast<size_t>(body)];
+        for (double sxn : {-1.0, 1.0})
+            for (double syn : {-1.0, 1.0}) {
+                const Vec3 corner = c + right * (sxn * half) + up * (syn * half);
+                addLine(corner, corner - right * (sxn * arm), green, origin);
+                addLine(corner, corner - up * (syn * arm), green, origin);
+            }
+        return;
+    }
+    // Off screen: a pointer at the edge toward it.
+    double x = dot(rel, right), y = dot(rel, up);
+    if (std::hypot(x, y) < 1e-12) y = -1;
+    const double a = std::atan2(y, x);
+    const float rx = static_cast<float>(width) * 0.42f, ry = static_cast<float>(height) * 0.40f;
+    const float px = static_cast<float>(width) / 2 + rx * f(std::cos(a));
+    const float py = static_cast<float>(height) / 2 - ry * f(std::sin(a));
+    const char* arrow = std::fabs(x) > std::fabs(y) ? (x > 0 ? ">" : "<") : (y > 0 ? "^" : "v");
+    const std::string s = std::string(arrow) + " " + name;
+    text(std::clamp(px - size * static_cast<float>(s.size()) / 2, 4.0f,
+                    static_cast<float>(width) - size * static_cast<float>(s.size()) - 4),
+         py - size / 2, size, green, s);
+}
+
 void Renderer::text(float x, float y, float size, const float color[4], const std::string& s) {
     textStorage_.push_back(s);
     StrataText t{};
@@ -317,14 +570,18 @@ FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, con
             nearest = std::min(nearest, length(drawn_[i] - origin) - drawnRadius_[i]);
         }
     }
-    const double nearPlane = std::max(0.01, std::min(nearest * 0.5, 1e9));
-    const double farPlane = nearPlane * 1e6;
+    double nearPlane = std::max(0.01, std::min(nearest * 0.5, 1e9));
+    if (cam.nearLimit > 0) nearPlane = std::min(nearPlane, cam.nearLimit);
+    // The ship sits just in front of its camera, so the depth range reaches further.
+    const double farPlane = nearPlane * (cam.ship ? 1e7 : 1e6);
     const float zero[3] = {0, 0, 0};
     const float target[3] = {f(forward.x), f(forward.y), f(forward.z)};
-    const float up[3] = {0, 0, 1};  // ecliptic north
-    const StrataCamera camera = strata::cameraLookAt(zero, target, up, f(cam.fovYDeg),
-                                                     static_cast<float>(width) / static_cast<float>(height),
-                                                     f(nearPlane), f(farPlane));
+    const Vec3 upVec = cam.ship ? cam.up : Vec3{0, 0, 1};  // ecliptic north, or the ship's up
+    const float up[3] = {f(upVec.x), f(upVec.y), f(upVec.z)};
+    camera_ = strata::cameraLookAt(zero, target, up, f(cam.fovYDeg),
+                                   static_cast<float>(width) / static_cast<float>(height), f(nearPlane),
+                                   f(farPlane));
+    const StrataCamera& camera = camera_;
     engine_.setCamera(camera);
 
     StrataLighting lighting = strata::lightingDefaults(STRATA_LIGHTING_SPACE);
@@ -340,7 +597,7 @@ FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, con
     engine_.setPointLights(&sunLight, 1);
 
     // Which planet system the camera is in: its moons get orbits and labels.
-    int system = cam.freeFly ? -1 : cam.focus;
+    int system = cam.freeFly ? -1 : view.ship ? view.ship->anchor() : cam.focus;
     if (system > 0 && bodies[static_cast<size_t>(system)].kind == BodyKind::Moon) system = bodies[static_cast<size_t>(system)].parent;
 
     // ---- bodies
@@ -440,6 +697,17 @@ FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, con
     for (size_t i = 1; i < bodies.size(); ++i) {
         if (bodies[i].kind == BodyKind::Planet) addRings(static_cast<int>(i), state, view.scale, origin);
     }
+    if (view.ship) {
+        addDust(*view.ship, origin);
+        if (!view.cockpit) {
+            const size_t before = meshIndices_.size();
+            addShip(*view.ship, origin);
+            report.shipTriangles = static_cast<int>((meshIndices_.size() - before) / 3);
+        }
+        if (cam.focus >= 0 && state.valid[static_cast<size_t>(cam.focus)]) {
+            addTargetMarker(cam.focus, cam, origin, width, height);
+        }
+    }
     if (ringMesh_ != 0) engine_.removeMesh(ringMesh_);
     ringMesh_ = 0;
     if (!meshIndices_.empty()) {
@@ -456,40 +724,66 @@ FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, con
 
     // ---- labels
     if (view.labels) {
-        const float* v = camera.view;
         const float* pr = camera.projection;
         struct Rect {
             float x0, y0, x1, y1;
         };
         std::vector<Rect> taken;
+        if (view.ship && !view.cockpit) {  // keep labels off the ship
+            const Ship& ship = *view.ship;
+            const Vec3 left = cross(ship.up, ship.forward);
+            Rect box{1e9f, 1e9f, -1e9f, -1e9f};
+            for (const auto& k : kHull) {
+                const Vec3 p = ship.position + (ship.forward * k[0] + left * k[1] + ship.up * k[2]) * ship.size();
+                float hx = 0, hy = 0, hw = 0;
+                if (!project(p - origin, width, height, hx, hy, hw)) continue;
+                box = {std::min(box.x0, hx), std::min(box.y0, hy), std::max(box.x1, hx), std::max(box.y1, hy)};
+            }
+            if (box.x0 <= box.x1) taken.push_back(box);
+        }
         if (view.hud) {  // keep labels off the HUD text
             const float k = width >= 1000 ? 1.0f : 0.55f;
             taken.push_back({0, 0, width >= 1000 ? 880.0f : 380.0f, 128 * k});
-            taken.push_back({0, static_cast<float>(height) - 70 * k, 560 * k, static_cast<float>(height)});
+            if (view.ship) {
+                taken.push_back({0, static_cast<float>(height) - 150 * k, 900 * k, static_cast<float>(height)});
+            } else {
+                taken.push_back({0, static_cast<float>(height) - 70 * k, 560 * k, static_cast<float>(height)});
+            }
         }
         // Close to a body, things far behind it are not labelled (they would
         // sit next to it on screen and read as its neighbours).
-        const double labelRange = cam.freeFly || cam.focus == 0 ? 1e300 : 25.0 * cam.distance;
+        const double labelRange = cam.freeFly || cam.ship || cam.focus == 0 ? 1e300 : 25.0 * cam.distance;
+        // Discs big enough on screen to hide what is behind them, and its label.
+        struct Disc {
+            size_t body;
+            float x, y, r, w;
+        };
+        std::vector<Disc> discs;
+        for (size_t i = 0; i < bodies.size(); ++i) {
+            float sx = 0, sy = 0, clipW = 0;
+            if (!state.valid[i] || drawnRadius_[i] <= 0 || !project(drawn_[i] - origin, width, height, sx, sy, clipW)) continue;
+            const float r = f(drawnRadius_[i] * pr[5] * 0.5 * height / clipW);
+            if (r > 4) discs.push_back({i, sx, sy, r, clipW});
+        }
         auto tryLabel = [&](size_t i, float size) {
             const Vec3 rel = drawn_[i] - origin;
             if (length(rel) > labelRange && i != 0) return;
-            float clip[4] = {0, 0, 0, 0};
-            const float in[4] = {f(rel.x), f(rel.y), f(rel.z), 1};
-            float eyeSpace[4] = {0, 0, 0, 0};
-            for (int r = 0; r < 4; ++r)
-                for (int c = 0; c < 4; ++c) eyeSpace[r] += v[c * 4 + r] * in[c];
-            for (int r = 0; r < 4; ++r)
-                for (int c = 0; c < 4; ++c) clip[r] += pr[c * 4 + r] * eyeSpace[c];
-            if (clip[3] <= 0) return;
-            const float sx = (clip[0] / clip[3] * 0.5f + 0.5f) * static_cast<float>(width);
-            const float sy = (0.5f - clip[1] / clip[3] * 0.5f) * static_cast<float>(height);
-            const float radiusPx = f(drawnRadius_[i] * pr[5] * 0.5 * height / clip[3]);
+            float sx = 0, sy = 0, clipW = 0;
+            if (!project(rel, width, height, sx, sy, clipW)) return;
+            for (const Disc& d : discs) {  // behind a nearer body: no label
+                if (d.body != i && d.w < clipW && std::hypot(sx - d.x, sy - d.y) < d.r) return;
+            }
+            const float radiusPx = f(drawnRadius_[i] * pr[5] * 0.5 * height / clipW);
             const std::string& name = bodies[i].name;
             const float x = sx + std::max(radiusPx, 3.0f) + 5, y = sy - size / 2;
             const Rect r{x - 2, y - 2, x + size * static_cast<float>(name.size()) + 2, y + size + 2};
             if (r.x0 < 0 || r.x1 > static_cast<float>(width) || r.y0 < 0 || r.y1 > static_cast<float>(height)) return;
             for (const Rect& t : taken) {
                 if (r.x0 < t.x1 && r.x1 > t.x0 && r.y0 < t.y1 && r.y1 > t.y0) return;
+            }
+            for (const Disc& d : discs) {  // nor one written across a nearer body
+                const float nx = std::clamp(d.x, r.x0, r.x1), ny = std::clamp(d.y, r.y0, r.y1);
+                if (d.body != i && d.w < clipW && std::hypot(nx - d.x, ny - d.y) < d.r) return;
             }
             taken.push_back(r);
             text(x, y, size, bodies[i].kind == BodyKind::Moon ? kDim : kWhite, name);
@@ -536,6 +830,85 @@ FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, con
     return report;
 }
 
+void Renderer::flightHud(const SystemState& state, const CameraState& cam, const ViewOptions& view, int width,
+                         int height) {
+    const Ship& ship = *view.ship;
+    const auto& bodies = sys_.bodies();
+    const float big = width >= 1000 ? 16.0f : 8.0f, small = 8;
+    float y = static_cast<float>(height) - 14 - small - 4 * (big + 6) - (small + 6);
+    if (!view.prompt.empty()) y -= big + 6;
+
+    // DRIVE  thrusters  cruise  [WARP 1]  warp 2  warp 3
+    float x = 10;
+    auto put = [&](const std::string& s, const float color[4], float size) {
+        text(x, y, size, color, s);
+        x += size * static_cast<float>(s.size());
+    };
+    put("DRIVE  ", kDim, big);
+    for (int i = 0; i < kDriveTierCount; ++i) {
+        std::string name = kDriveTiers[i].name;
+        if (i == ship.tier()) {
+            for (char& ch : name) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+            put("[" + name + "]  ", i >= 2 ? kGo : kWhite, big);
+        } else {
+            put(name + "  ", kDim, big);
+        }
+    }
+    y += big + 6;
+
+    // SPEED  149,896 km/s  (0.50 c)    THROTTLE [########--] 80%
+    x = 10;
+    put("SPEED  ", kDim, big);
+    put(speedText(ship.speed), kWhite, big);
+    const int bars = static_cast<int>(std::lround(std::fabs(ship.throttle()) * 10));
+    put("    THROTTLE [" + std::string(static_cast<size_t>(bars), '#') + std::string(static_cast<size_t>(10 - bars), '-') + "] ",
+        kDim, big);
+    char buf[256];
+    std::snprintf(buf, sizeof buf, "%s%.0f%%", ship.throttle() < 0 ? "reverse " : "", std::fabs(ship.throttle()) * 100);
+    put(buf, kWhite, big);
+    y += big + 6;
+
+    // What is happening: autopilot, mass lock, landed, arrived.
+    auto name = [&](int i) { return bodies[static_cast<size_t>(i)].name; };
+    x = 10;
+    if (ship.autopilot()) put("AUTOPILOT to " + name(ship.target()), kGo, big);
+    if (ship.massLock() >= 0) {
+        if (ship.autopilot()) put("   ", kDim, big);
+        put("MASS LOCK: " + name(ship.massLock()) + " holds the drive", kWarn, big);
+    } else if (ship.touched() >= 0) {
+        put("LANDED on " + name(ship.touched()), kGo, big);
+    } else if (ship.arrived() >= 0) {
+        put("ARRIVED at " + name(ship.arrived()), kGo, big);
+    }
+    y += big + 6;
+
+    // TARGET Mars  0.512 au  ETA 4 min 13 s
+    x = 10;
+    if (cam.focus >= 0 && state.valid[static_cast<size_t>(cam.focus)]) {
+        const FlightBody target{drawn_[static_cast<size_t>(cam.focus)], drawnRadius_[static_cast<size_t>(cam.focus)], 0, true};
+        const Vec3 rel = target.centre - ship.position;
+        const double dist = length(rel);
+        put("TARGET ", kDim, big);
+        put(name(cam.focus) + "  " + distanceText(dist), kWhite, big);
+        const double closing = dist > 0 ? ship.speed * dot(ship.forward, rel / dist) : 0;
+        const double remaining = dist - Ship::standoff(target);
+        if (closing > 0 && remaining > 0) put("   ETA " + durationText(remaining / closing), kWhite, big);
+    } else {
+        put("no target: Tab or 0-9 picks one", kDim, big);
+    }
+    y += big + 6;
+
+    std::string near;
+    if (ship.nearest() >= 0) near = "nearest surface: " + name(ship.nearest()) + ", " + distanceText(ship.altitude());
+    if (ship.anchor() > 0) near += "   moving with " + name(ship.anchor());
+    if (view.scale.mode == ScaleMode::Compressed) near += "   (speeds and distances are of the COMPRESSED drawing)";
+    text(10, y, small, kDim, near);
+
+    if (view.cockpit) {
+        text(static_cast<float>(width) / 2 - big / 2, static_cast<float>(height) / 2 - big / 2, big, kGo, "+");
+    }
+}
+
 void Renderer::hud(const SystemState& state, const CameraState& cam, const ViewOptions& view, int width, int height) {
     const auto& bodies = sys_.bodies();
     float y = 10;
@@ -555,7 +928,7 @@ void Renderer::hud(const SystemState& state, const CameraState& cam, const ViewO
     if (!cam.freeFly) {
         const size_t i = static_cast<size_t>(cam.focus);
         const Body& b = bodies[i];
-        std::snprintf(buf, sizeof buf, "%s  (%s)", b.name.c_str(), kindName(b.kind));
+        std::snprintf(buf, sizeof buf, "%s%s  (%s)", cam.ship ? "TARGET  " : "", b.name.c_str(), kindName(b.kind));
         text(10, y, big, kWhite, buf);
         y += big + 4;
         std::string line;
@@ -612,9 +985,13 @@ void Renderer::hud(const SystemState& state, const CameraState& cam, const ViewO
         std::snprintf(buf, sizeof buf, "%zu small bodies (SBDB elements, two-body)", sys_.smallBodies().size());
         text(10, y, small, kDim, buf);
     }
+    if (view.ship) flightHud(state, cam, view, width, height);
     if (!view.prompt.empty()) text(10, static_cast<float>(height) - 60, big, kWarn, view.prompt);
     if (view.keyHints) {
-        text(10, static_cast<float>(height) - 14 - small, small, kDim, "H help   Tab next body   M scale mode   Space pause");
+        text(10, static_cast<float>(height) - 14 - small, small, kDim,
+             view.ship ? "W/S throttle   wheel drive   drag/arrows/A D steer   Q/E roll   Tab target   T autopilot   "
+                         "Z stop   C view   V leave"
+                       : "H help   Tab next body   M scale mode   Space pause   V ship");
     }
 
     if (view.help) {
@@ -626,6 +1003,7 @@ void Renderer::hud(const SystemState& state, const CameraState& cam, const ViewO
             "Home         the Sun",
             "Left drag    orbit the focus          Wheel, PgUp/PgDn  zoom",
             "F            free flight: WASD move, Q/E down/up, drag to look",
+            "V            ship: W/S throttle, wheel drive tier, T autopilot",
             "M            TRUE / COMPRESSED scale",
             "[ ]          body enlargement (TRUE mode)",
             "O  L  B  X   orbits, labels, small bodies, spin axes",

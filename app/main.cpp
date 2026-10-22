@@ -8,7 +8,9 @@
 //   orrery --smoke-test DIR
 //
 // View options: --yaw DEG --pitch DEG --distance-au AU (drawn), --no-labels, --no-orbits,
-// --no-small-bodies, --no-hud, --axes.
+// --no-small-bodies, --no-hud, --axes. Ship: --ship [--drive 1-5] [--throttle F] [--cockpit]
+// [--target NAME [--autopilot]] starts in the ship where the orbit camera would be (with --frames
+// it flies 1/30 s per frame).
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -46,10 +48,11 @@ namespace {
 
 // SDL3 scancodes (USB HID usage ids), as Strata reports them.
 enum Key {
-    kA = 4, kB = 5, kD = 7, kE = 8, kF = 9, kH = 11, kJ = 13, kL = 15, kM = 16, kN = 17, kO = 18, kP = 19, kQ = 20,
-    kS = 22, kU = 24, kW = 26, kX = 27, k1 = 30, k0 = 39, kReturn = 40, kEscape = 41, kBackspace = 42, kTab = 43,
+    kA = 4, kB = 5, kC = 6, kD = 7, kE = 8, kF = 9, kH = 11, kJ = 13, kL = 15, kM = 16, kN = 17, kO = 18, kP = 19,
+    kQ = 20, kS = 22, kT = 23, kU = 24, kV = 25, kW = 26, kX = 27, kZ = 29, k1 = 30, k0 = 39, kReturn = 40,
+    kEscape = 41, kBackspace = 42, kTab = 43,
     kSpace = 44, kLeftBracket = 47, kRightBracket = 48, kComma = 54, kPeriod = 55, kHome = 74, kPageUp = 75,
-    kPageDown = 78,
+    kPageDown = 78, kRight = 79, kLeft = 80, kDown = 81, kUp = 82,
 };
 constexpr int kShift = 0x0001 | 0x0002;
 
@@ -74,6 +77,10 @@ struct Args {
     double yawStep = 0.0;   // degrees per frame
     double yaw = -60, pitch = 25, distanceAu = 0;
     bool labels = true, orbits = true, smallBodies = true, hud = true, axes = false;
+    bool ship = false, cockpit = false, autopilot = false;
+    std::string target;     // ship: the target, if not --focus
+    int drive = 1;          // 1 = thrusters .. 5 = warp 3
+    double throttle = 0;
 };
 
 int usage() {
@@ -82,6 +89,7 @@ int usage() {
         "              [--enlarge K] [--rate DAYS_PER_SECOND] [--width W] [--height H]\n"
         "              [--yaw DEG] [--pitch DEG] [--distance-au AU] [--no-labels] [--no-orbits]\n"
         "              [--no-small-bodies] [--no-hud] [--axes]\n"
+        "              [--ship [--drive 1-5] [--throttle F] [--cockpit] [--target NAME [--autopilot]]]\n"
         "       orrery --headless ... --screenshot out.png\n"
         "       orrery --headless ... --frames DIR --count N [--step DAYS] [--yaw-step DEG]\n"
         "       orrery ... --export-usda out.usda\n"
@@ -126,9 +134,15 @@ bool parse(int argc, char** argv, Args& a) {
         else if (k == "--no-small-bodies") a.smallBodies = false;
         else if (k == "--no-hud") a.hud = false;
         else if (k == "--axes") a.axes = true;
+        else if (k == "--ship") a.ship = true;
+        else if (k == "--cockpit") a.cockpit = true;
+        else if (k == "--target") a.target = val();
+        else if (k == "--autopilot") a.autopilot = true;
+        else if (k == "--drive") a.drive = std::atoi(val().c_str());
+        else if (k == "--throttle") a.throttle = std::atof(val().c_str());
         else return false;
     }
-    return a.width > 0 && a.height > 0 && a.enlarge >= 1;
+    return a.width > 0 && a.height > 0 && a.enlarge >= 1 && a.drive >= 1 && a.drive <= kDriveTierCount;
 }
 
 std::string rateText(double rate, bool paused) {
@@ -173,6 +187,8 @@ struct Smoke {
     const char* focus;
     ScaleMode mode;
     double enlarge;
+    bool ship;
+    double distanceAu;  // 0: the default
 };
 
 // Fraction of pixels brighter than the background, and whether a pixel near
@@ -200,11 +216,78 @@ struct World {
     ViewOptions view;
     int width = 0, height = 0;
 
+    // ---- the ship (V): it starts where the camera is, looking where it looks
+    Ship ship;
+    FlightControls controls;
+    double shipDt = 0;          // seconds the next frame flies
+    bool boardPending = false;  // board on the next frame, once bodies are laid out
+    Vec3 chaseLook, chaseUp;    // the chase camera trails the ship's turns
+
+    void board() {
+        ship.place(renderer->eyeOf(cam), renderer->forwardOf(cam));
+        chaseLook = ship.forward;
+        chaseUp = ship.up;
+        cam.freeFly = false;
+        cam.ship = true;
+        view.ship = &ship;
+    }
+
+    void disembark() {
+        // Back to orbiting the target from where the camera is.
+        const Vec3 rel = cam.eye - renderer->drawn()[static_cast<size_t>(cam.focus)];
+        const Vec3 dir = normalize(rel);
+        cam.yawDeg = std::atan2(dir.y, dir.x) / kDegToRad;
+        cam.pitchDeg = std::clamp(std::asin(std::clamp(dir.z, -1.0, 1.0)) / kDegToRad, -89.0, 89.0);
+        cam.distance = std::max(length(rel), 1.0);
+        cam.ship = false;
+        cam.nearLimit = 0;
+        view.ship = nullptr;
+    }
+
+    void shipCamera(const std::vector<FlightBody>& bodies) {
+        const double L = ship.size();
+        if (view.cockpit) {
+            cam.eye = ship.position + ship.forward * (0.3 * L) + ship.up * (0.1 * L);
+            cam.look = ship.forward;
+            cam.up = ship.up;
+            cam.nearLimit = 0;
+        } else {
+            const double a = shipDt > 0 ? 1 - std::exp(-shipDt / 0.15) : 1.0;
+            chaseLook = normalize(chaseLook + (ship.forward - chaseLook) * a);
+            chaseUp = normalize(chaseUp + (ship.up - chaseUp) * a);
+            cam.eye = ship.position - chaseLook * (3.2 * L) + chaseUp * (0.9 * L);
+            cam.look = normalize(ship.position + chaseLook * (4.0 * L) - cam.eye);
+            cam.up = normalize(chaseUp - cam.look * dot(chaseUp, cam.look));
+            cam.nearLimit = 0.5 * L;
+        }
+        for (const FlightBody& b : bodies) {  // never inside a surface
+            if (!b.present || b.radius <= 0) continue;
+            const Vec3 rel = cam.eye - b.centre;
+            if (length(rel) < b.radius + 0.3 * L) cam.eye = b.centre + normalize(rel) * (b.radius + 0.3 * L);
+        }
+    }
+
     FrameReport frame(const std::string& rate) {
         sys->evaluate(jd, state, view.smallBodies);
         renderer->layout(state, view.scale);
         if (cam.distance <= 0) {
             cam.distance = args.distanceAu > 0 ? args.distanceAu * kAuKm : renderer->defaultDistance(cam.focus);
+        }
+        if (boardPending) {
+            boardPending = false;
+            board();
+            ship.setTier(args.drive - 1);
+            ship.setThrottle(args.throttle);
+            ship.speed = args.throttle * ship.topSpeed();  // already up to speed; mass lock still applies
+            if (!args.target.empty()) cam.focus = sys->find(args.target);
+            ship.setTarget(cam.focus);
+            ship.engageAutopilot(args.autopilot);
+        }
+        if (cam.ship) {
+            const std::vector<FlightBody> bodies = renderer->flightBodies(state);
+            ship.setTarget(cam.focus);
+            ship.step(shipDt, controls, bodies);
+            shipCamera(bodies);
         }
         view.timeLine = timeLine(jd, rate);
         return renderer->draw(state, cam, view, width, height);
@@ -233,19 +316,32 @@ struct Interactive {
     void focus(int body) {
         if (body < 0 || body >= static_cast<int>(w->sys->bodies().size())) return;
         w->cam.focus = body;
+        if (w->cam.ship) return;  // in the ship the focus is the target; the camera stays
         w->cam.freeFly = false;
         w->cam.distance = w->renderer->defaultDistance(body);
     }
 
     void orbit(double dx, double dy) {
         CameraState& cam = w->cam;
+        if (cam.ship) {  // in the ship a drag steers
+            w->controls.yaw += dx * 0.003;
+            w->controls.pitch -= dy * 0.003;
+            return;
+        }
         const double sign = cam.freeFly ? -1 : 1;
         cam.yawDeg -= dx * 0.3 * sign;
         cam.pitchDeg = std::clamp(cam.pitchDeg + dy * 0.3 * sign, -89.0, 89.0);
     }
 
     void zoom(double factor) {
+        if (w->cam.ship) return;  // the ship's camera follows the ship
         if (factor > 0 && std::isfinite(factor)) w->cam.distance *= factor;
+    }
+
+    // Steps the ship's drive up or down a tier (wheel, PgUp / PgDn).
+    void drive(int by) {
+        w->ship.engageAutopilot(false);
+        w->ship.setTier(w->ship.tier() + by);
     }
 
     void key(int scancode, bool shift) {
@@ -266,7 +362,20 @@ struct Interactive {
             }
             return;
         }
+        if (cam.ship) {  // ship keys; the rest fall through to the usual ones
+            switch (scancode) {
+                case kV: w->disembark(); return;
+                case kT: w->ship.engageAutopilot(!w->ship.autopilot()); return;
+                case kZ: w->ship.allStop(); return;
+                case kC: view.cockpit = !view.cockpit; return;
+                case kPageUp: drive(1); return;
+                case kPageDown: drive(-1); return;
+                case kF: return;
+                default: break;
+            }
+        }
         switch (scancode) {
+            case kV: w->board(); break;
             case kEscape:
 #if !defined(__EMSCRIPTEN__)
                 running = false;  // a page is closed by the browser, not by Esc
@@ -358,6 +467,8 @@ struct Interactive {
             dragging = false;
         } else if (ev.type == STRATA_EVENT_MOUSE_MOTION && dragging) {
             orbit(ev.dx, ev.dy);
+        } else if (ev.type == STRATA_EVENT_MOUSE_WHEEL && w->cam.ship) {
+            if (ev.y != 0) drive(ev.y > 0 ? 1 : -1);
         } else if (ev.type == STRATA_EVENT_MOUSE_WHEEL) {
             zoom(std::pow(0.85, ev.y));
         }
@@ -383,6 +494,15 @@ struct Interactive {
         CameraState& cam = w->cam;
         Renderer& renderer = *w->renderer;
         if (!paused) w->jd = clampJd(w->jd + rate * dt);
+        if (cam.ship && !entering) {
+            FlightControls& c = w->controls;
+            const double turn = 1.0 * dt, roll = 1.6 * dt;
+            c.throttleRate = (keys[kW] ? 0.6 : 0.0) - (keys[kS] ? 0.6 : 0.0);
+            c.pitch += (keys[kUp] ? turn : 0.0) - (keys[kDown] ? turn : 0.0);
+            c.yaw += (keys[kRight] || keys[kD] ? turn : 0.0) - (keys[kLeft] || keys[kA] ? turn : 0.0);
+            c.roll += (keys[kE] ? roll : 0.0) - (keys[kQ] ? roll : 0.0);
+        }
+        w->shipDt = dt;
         if (cam.freeFly) {
             // Speed scales with the distance to the nearest body's surface.
             double nearest = 1e300;
@@ -402,6 +522,7 @@ struct Interactive {
         }
         w->view.prompt = entering ? "Jump to date (UTC, YYYY-MM-DD[THH:MM]): " + entry + "_" : "";
         report = w->frame(rateText(rate, paused));
+        w->controls = FlightControls{};
         w->engine->present();
         ++frames;
     }
@@ -551,20 +672,27 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "no body named '%s'\n", args.focus.c_str());
             return 2;
         }
+        if (!args.target.empty() && sys.find(args.target) < 0) {
+            std::fprintf(stderr, "no body named '%s'\n", args.target.c_str());
+            return 2;
+        }
         cam.yawDeg = args.yaw;
         cam.pitchDeg = args.pitch;
 
         world->width = args.width;
         world->height = args.height;
+        world->boardPending = args.ship;
+        view.cockpit = args.cockpit;
         auto frame = [&](const std::string& rate) { return world->frame(rate); };
 
         // ---- smoke test: three views, each must be visibly drawn
         if (!args.smokeDir.empty()) {
             std::filesystem::create_directories(args.smokeDir);
             const Smoke views[] = {
-                {"overview_true", "2026-10-18", "Sun", ScaleMode::True, 500},
-                {"saturn_true", "2026-10-18", "Saturn", ScaleMode::True, 1},
-                {"overview_compressed", "2026-10-18", "Sun", ScaleMode::Compressed, 1},
+                {"overview_true", "2026-10-18", "Sun", ScaleMode::True, 500, false, 0},
+                {"saturn_true", "2026-10-18", "Saturn", ScaleMode::True, 1, false, 0},
+                {"overview_compressed", "2026-10-18", "Sun", ScaleMode::Compressed, 1, false, 0},
+                {"ship_saturn", "2026-10-18", "Saturn", ScaleMode::True, 1, true, 0.004},
             };
             int failures = 0;
             for (const Smoke& s : views) {
@@ -572,9 +700,11 @@ int main(int argc, char** argv) {
                 parseIsoDate(s.date, c);
                 jd = utcToTdb(julianDate(c));
                 cam.focus = sys.find(s.focus);
-                cam.distance = 0;
+                if (cam.ship) world->disembark();
+                cam.distance = s.distanceAu * kAuKm;
                 view.scale.mode = s.mode;
                 view.scale.enlarge = s.enlarge;
+                world->boardPending = s.ship;
                 const FrameReport r = frame("paused");
                 std::vector<uint8_t> rgba;
                 int32_t w = 0, h = 0;
@@ -582,9 +712,11 @@ int main(int argc, char** argv) {
                 const double lit = litFraction(rgba);
                 const std::string out = args.smokeDir + "/" + s.name + ".png";
                 engine->saveScreenshotPng(out);
-                const bool ok = lit > 0.002 && r.spheres >= 38 && r.points > 1000 && r.lineVertices > 1000 && r.labels >= 2;
-                std::printf("%s: %s  lit %.4f, %d spheres, %d points, %d line vertices, %d labels -> %s\n", s.name,
-                            ok ? "ok" : "FAIL", lit, r.spheres, r.points, r.lineVertices, r.labels, out.c_str());
+                const bool ok = lit > 0.002 && r.spheres >= 38 && r.points > 1000 && r.lineVertices > 1000 &&
+                                r.labels >= 2 && (!s.ship || r.shipTriangles > 0);
+                std::printf("%s: %s  lit %.4f, %d spheres, %d points, %d line vertices, %d labels, %d ship triangles -> %s\n",
+                            s.name, ok ? "ok" : "FAIL", lit, r.spheres, r.points, r.lineVertices, r.labels,
+                            r.shipTriangles, out.c_str());
                 if (!ok) ++failures;
             }
             return failures == 0 ? 0 : 1;
@@ -595,6 +727,7 @@ int main(int argc, char** argv) {
                 std::filesystem::create_directories(args.framesDir);
                 const int count = std::max(args.count, 1);
                 for (int i = 0; i < count; ++i) {
+                    world->shipDt = i == 0 ? 0.0 : 1.0 / 30;
                     char rate[64];
                     std::snprintf(rate, sizeof rate, "%g d per frame", args.step);
                     frame(rate);
