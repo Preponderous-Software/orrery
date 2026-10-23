@@ -151,6 +151,7 @@ const char* touchdownName(Touchdown::Grade g) {
         case Touchdown::Soft: return "soft";
         case Touchdown::Hard: return "hard";
         case Touchdown::Crash: return "crash";
+        case Touchdown::Lost: return "lost";
         default: return "none";
     }
 }
