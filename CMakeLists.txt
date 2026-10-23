@@ -65,7 +65,7 @@ orrery_warnings(orrery_core)
 
 if(ORRERY_BUILD_TESTS)
   enable_testing()
-  foreach(t time kepler scale rotation csv flight)
+  foreach(t time kepler scale rotation csv flight element_table)
     add_executable(test_${t} tests/test_${t}.cpp)
     target_link_libraries(test_${t} PRIVATE orrery_core)
     orrery_warnings(test_${t})

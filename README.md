@@ -238,6 +238,7 @@ For scale:
 The other tests:
 
 - `test_kepler` covers Kepler's equation (elliptic and hyperbolic) to 1e-12, circular and eccentric orbits (by mean and by eccentric anomaly), the state ↔ elements round trip, and table interpolation that is exact against a synthetic Phobos-like orbit.
+- `test_element_table` covers the moon and dwarf-planet element tables: loading a catalogue CSV by column name and sorting it by epoch, the error for a table with no rows, linear a, e and i between samples, node and argument of periapsis taking the shorter arc across 0/360, the mean longitude unwrapped by the whole turns the first sample predicts, and two-body propagation (flagged as extrapolated) before the first sample, after the last and around a single sample.
 - `test_time` covers Julian Dates, leap seconds and TDB − UTC, and ISO parsing.
 - `test_scale` checks that TRUE mode leaves positions untouched and multiplies radii by exactly the stated factor, and that COMPRESSED mode keeps direction and order. It also checks unit conversions (au, obliquity).
 - `test_rotation` checks the body frames built from the IAU rotation elements: each frame is right-handed and orthonormal with +Z on the pole, W = 0 puts the prime meridian on the ascending node, and Earth's pole is 23.44° from ecliptic north with its prime meridian back in place after one sidereal day.
