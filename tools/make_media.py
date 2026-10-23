@@ -4,7 +4,8 @@
     LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe \\
         uv run --python 3.12 --with pillow==11.0.0 tools/make_media.py build/orrery
 
-Writes docs/media/*.png, docs/media/hero.gif, earth_day.gif, ship.gif and landing.gif. Every image is a plain
+Writes docs/media/*.png (mission_complete.png is the last frame of a mission flown on the landing
+autopilot), docs/media/hero.gif, earth_day.gif, ship.gif and landing.gif. Every image is a plain
 `orrery --headless` run; the command for each is printed.
 """
 from __future__ import annotations
@@ -33,6 +34,8 @@ STILLS = {
                    "--pitch", "15", "--yaw", "-70", "--no-small-bodies"],
     "kuiper_compressed": ["--date", "2026-10-18", "--focus", "Sun", "--mode", "compressed", "--distance-au", "30",
                           "--pitch", "70", "--yaw", "-90"],
+    "missions": ["--date", "2026-11-24", "--focus", "Sun", "--enlarge", "500", "--pitch", "30", "--yaw", "-70",
+                 "--no-labels", "--missions"],
 }
 
 
@@ -120,6 +123,16 @@ def main() -> int:
         out = MEDIA / "landing.gif"
         frames[0].save(out, save_all=True, append_images=frames[1:], duration=120, loop=0, optimize=True)
         print(f"wrote {out} ({out.stat().st_size / 1e6:.2f} MB, {len(frames)} frames)")
+
+    # The Moon run flown on the landing autopilot (about 25 s, at 1/30 s per
+    # frame): its last frame, landed, with the mission complete.
+    with tempfile.TemporaryDirectory() as tmp:
+        run(binary, ["--mission", "moon-run", "--land", "--no-small-bodies", "--frames", tmp, "--count", "790",
+                     "--step", "0"])
+        last = sorted(Path(tmp).glob("frame_*.png"))[-1]
+        out = MEDIA / "mission_complete.png"
+        Image.open(last).save(out)
+        print(f"wrote {out}")
     return 0
 
 

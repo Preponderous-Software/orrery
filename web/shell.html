@@ -57,6 +57,20 @@
                            background: rgba(26, 32, 41, 0.72); }
   #flight-buttons button.held { background: var(--button-on); border-color: var(--accent); }
   @media (pointer: coarse) { #joystick { display: none; } }
+  /* The mission sheet: a panel at the top right, a bottom sheet on a phone. */
+  #missions { position: absolute; top: 12px; right: 12px; width: min(420px, calc(100% - 24px));
+              max-height: calc(100% - 24px); display: flex; flex-direction: column; background: rgba(16, 20, 27, 0.95);
+              border: 1px solid var(--line); border-radius: 10px; z-index: 2; }
+  #missions[hidden] { display: none; }
+  #missions .head-row { display: flex; gap: 6px; align-items: center; padding: 8px 8px 8px 14px;
+                        border-bottom: 1px solid var(--line); }
+  #missions h2 { font-size: 16px; margin: 0; flex: 1 1 auto; }
+  #mission-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; }
+  #mission-list button { display: block; width: 100%; text-align: left; padding: 8px 10px; margin: 0 0 4px; }
+  #mission-list .kind { color: var(--accent); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;
+                        margin-right: 8px; }
+  #mission-list .brief, #mission-list .times { display: block; color: var(--muted); font-size: 13px; }
+  #mission-list .times { font-variant-numeric: tabular-nums; }
   #rate { color: var(--muted); min-width: 6.5em; text-align: center; font-variant-numeric: tabular-nums; }
   @media (max-width: 640px) {
     /* Two rows on a phone: the body picker, then time and view. */
@@ -68,6 +82,8 @@
     nav a { order: 0; margin-left: 4px; font-size: 13px; }
     nav .break { display: block; flex-basis: 100%; height: 0; }
     .wide, #rate { display: none; }
+    #missions { top: auto; bottom: 0; right: 0; left: 0; width: auto; max-height: 75%;
+                border-radius: 12px 12px 0 0; border-bottom: none; }
   }
 </style>
 </head>
@@ -93,12 +109,23 @@
       <div class="zero"></div><div id="handle"></div>
     </div>
   </div>
+  <section id="missions" aria-labelledby="missions-title" hidden>
+    <div class="head-row">
+      <h2 id="missions-title">Missions</h2>
+      <button id="abandon" title="Abandon the current mission (Backspace in the list)" hidden>Abandon</button>
+      <button id="missions-close" aria-label="Close the mission list">&times;</button>
+    </div>
+    <ol id="mission-list"></ol>
+  </section>
 </div>
 <nav aria-label="Orrery controls">
   <div class="group">
     <button id="prev" title="Previous body (Shift+Tab)" aria-label="Previous body">&lsaquo;</button>
     <select id="body" aria-label="Focus on a body"></select>
     <button id="next" title="Next body (Tab)" aria-label="Next body">&rsaquo;</button>
+  </div>
+  <div class="group">
+    <button id="missions-button" title="Missions (I)" aria-pressed="false">Missions</button>
   </div>
   <a href="https://danielstephenson.dev/play">More games</a>
   <span class="break" aria-hidden="true"></span>
@@ -162,6 +189,12 @@
       holdKey: Module.cwrap('orrery_hold_key', null, ['number', 'number']),
       stick: Module.cwrap('orrery_stick', null, ['number', 'number']),
       throttle: Module.cwrap('orrery_throttle', null, ['number']),
+      missionCount: Module.cwrap('orrery_mission_count', 'number', []),
+      missionJson: Module.cwrap('orrery_mission_json', 'string', ['number']),
+      startMission: Module.cwrap('orrery_start_mission', 'number', ['number']),
+      abandonMission: Module.cwrap('orrery_abandon_mission', null, []),
+      records: Module.cwrap('orrery_records', 'string', []),
+      loadRecords: Module.cwrap('orrery_load_records', null, ['string']),
     };
     window.orrery = api;  // for the smoke test (web/smoke/smoke.mjs)
     const select = document.getElementById('body');
@@ -176,6 +209,7 @@
       option.value = i; option.textContent = api.name(i);
       groups[label].appendChild(option);
     }
+    try { const r = localStorage.getItem('orrery.records'); if (r) api.loadRecords(r); } catch (e) {}
     const s = api.status();
     const date = document.getElementById('date');
     date.min = s.firstDate.slice(0, 10); date.max = s.lastDate.slice(0, 10);
@@ -222,6 +256,12 @@
     document.getElementById('rate').textContent = s.paused ? '' : s.rate;
     document.getElementById('mode').setAttribute('aria-pressed', String(s.mode === 'compressed'));
     for (const id of ['labels', 'orbits', 'help']) document.getElementById(id).setAttribute('aria-pressed', String(s[id]));
+    document.getElementById('abandon').hidden = !(s.mission && !s.missionComplete);
+    if (s.recordsVersion !== savedRecords) {  // a new best: keep it in this browser
+      savedRecords = s.recordsVersion;
+      try { localStorage.setItem('orrery.records', api.records()); } catch (e) {}
+      if (!sheet.hidden) listMissions();
+    }
   }
   function press(code, shift) { if (api) { api.key(code, shift ? 1 : 0); sync(); } }
   document.getElementById('prev').onclick = () => press(KEY.tab, true);
@@ -237,6 +277,47 @@
   document.getElementById('help').onclick = () => press(KEY.h);
   document.getElementById('date').onchange = (e) => { if (api && e.target.value) api.setDate(e.target.value); };
   document.getElementById('ship').onclick = () => press(KEY.v);
+
+  // Missions: the sheet lists them with this browser's best times; picking one
+  // starts it in the ship. The best times are kept in localStorage.
+  const sheet = document.getElementById('missions');
+  const missionsButton = document.getElementById('missions-button');
+  let savedRecords = 0;
+  function clock(seconds) {
+    const t = Math.round(Math.max(seconds, 0) * 10), two = (n) => String(n).padStart(2, '0');
+    if (t >= 36000) return `${Math.floor(t / 36000)}:${two(Math.floor(t / 600) % 60)}:${two(Math.floor(t / 10) % 60)}`;
+    return `${Math.floor(t / 600)}:${two(Math.floor(t / 10) % 60)}.${t % 10}`;
+  }
+  function listMissions() {
+    const list = document.getElementById('mission-list');
+    list.textContent = '';
+    for (let i = 0; i < api.missionCount(); i++) {
+      const m = JSON.parse(api.missionJson(i));
+      const item = document.createElement('li'), b = document.createElement('button');
+      b.dataset.id = m.id;
+      const kind = document.createElement('span'), title = document.createElement('strong');
+      const brief = document.createElement('span'), times = document.createElement('span');
+      kind.className = 'kind'; kind.textContent = m.kind;
+      title.textContent = m.title;
+      brief.className = 'brief'; brief.textContent = m.brief;
+      times.className = 'times';
+      times.textContent = [m.best > 0 ? 'best ' + clock(m.best) : 'not flown yet', m.par > 0 ? 'par ' + clock(m.par) : '']
+        .filter(Boolean).join(' \u00b7 ');
+      b.append(kind, title, brief, times);
+      b.onclick = () => { api.startMission(i); showMissions(false); canvas.focus({ preventScroll: true }); sync(); };
+      item.appendChild(b);
+      list.appendChild(item);
+    }
+  }
+  function showMissions(on) {
+    if (on && api) listMissions();
+    sheet.hidden = !on;
+    missionsButton.setAttribute('aria-pressed', String(on));
+  }
+  missionsButton.onclick = () => showMissions(sheet.hidden);
+  document.getElementById('missions-close').onclick = () => { showMissions(false); canvas.focus({ preventScroll: true }); };
+  document.getElementById('abandon').onclick = () => { if (api) { api.abandonMission(); sync(); } };
+  sheet.addEventListener('keydown', (e) => { if (e.key === 'Escape') showMissions(false); });
 
   // The ship's controls. Buttons press a key once; the roll buttons hold
   // theirs down while touched. On a desktop they show only with the toggle,

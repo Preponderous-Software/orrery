@@ -25,6 +25,14 @@ struct CameraState {
     double fovYDeg = 50;
 };
 
+// A line of HUD text the app sets, and its colour.
+enum class HudTone { Plain, Dim, Go, Warn };
+struct HudLine {
+    std::string text;
+    bool small = false;
+    HudTone tone = HudTone::Plain;
+};
+
 struct ViewOptions {
     Scale scale;
     bool orbits = true;
@@ -39,6 +47,11 @@ struct ViewOptions {
     std::string prompt;     // set by the app: date entry, or empty
     const Ship* ship = nullptr;  // ship mode: drawn and reported on
     bool cockpit = false;        // ship mode: from the cockpit, so the ship itself is not drawn
+    // Missions, set by the app: the ship HUD's mission line and the goal (or
+    // a note) under it, and the mission list while it is open.
+    std::string missionLine, missionGoal;
+    HudTone missionTone = HudTone::Plain;
+    std::vector<HudLine> panel;
 };
 
 // What the frame drew, for tests and the HUD.

@@ -59,7 +59,8 @@ add_library(orrery_core STATIC
   src/orrery/element_table.cpp
   src/orrery/system.cpp
   src/orrery/scale.cpp
-  src/orrery/flight.cpp)
+  src/orrery/flight.cpp
+  src/orrery/missions.cpp)
 target_include_directories(orrery_core PUBLIC src)
 orrery_warnings(orrery_core)
 
@@ -78,6 +79,12 @@ if(ORRERY_BUILD_TESTS)
   target_compile_definitions(test_ephemeris PRIVATE ORRERY_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
   orrery_warnings(test_ephemeris)
   add_test(NAME ephemeris COMMAND test_ephemeris)
+  # Also needs the catalogue: every mission's bodies must exist at its date.
+  add_executable(test_missions tests/test_missions.cpp)
+  target_link_libraries(test_missions PRIVATE orrery_core)
+  target_compile_definitions(test_missions PRIVATE ORRERY_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+  orrery_warnings(test_missions)
+  add_test(NAME missions COMMAND test_missions)
 endif()
 
 if(ORRERY_WITH_STRATA)
@@ -121,5 +128,11 @@ if(ORRERY_WITH_STRATA)
     # are not blank. Needs a GL 4.5 context (llvmpipe is fine).
     add_test(NAME render_smoke COMMAND orrery --data "${CMAKE_CURRENT_SOURCE_DIR}/data" --smoke-test
              "${CMAKE_CURRENT_BINARY_DIR}/smoke")
+    # A mission end to end in the app: the Moon run on the landing autopilot
+    # (about 25 s of flight; 800 frames fly 26.7 s) completes.
+    add_test(NAME mission_moon_run COMMAND orrery --data "${CMAKE_CURRENT_SOURCE_DIR}/data" --headless
+             --mission moon-run --land --no-small-bodies --width 160 --height 90
+             --frames "${CMAKE_CURRENT_BINARY_DIR}/mission_moon_run" --count 800 --step 0)
+    set_tests_properties(mission_moon_run PROPERTIES PASS_REGULAR_EXPRESSION "mission moon-run complete")
   endif()
 endif()

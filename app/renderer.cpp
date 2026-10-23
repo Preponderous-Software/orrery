@@ -87,6 +87,15 @@ constexpr float kWarn[4] = {1.0f, 0.75f, 0.35f, 1};
 constexpr float kGo[4] = {0.45f, 1.0f, 0.6f, 1};
 constexpr float kAlarm[4] = {1.0f, 0.42f, 0.38f, 1};
 
+const float* toneColor(HudTone tone) {
+    switch (tone) {
+        case HudTone::Dim: return kDim;
+        case HudTone::Go: return kGo;
+        case HudTone::Warn: return kWarn;
+        default: return kWhite;
+    }
+}
+
 }  // namespace
 
 // Planet maps by NAIF id: equirectangular, 0 degrees longitude in the
@@ -851,6 +860,8 @@ void Renderer::flightHud(const SystemState& state, const CameraState& cam, const
     const float big = width >= 1000 ? 16.0f : 8.0f, small = 8;
     float y = static_cast<float>(height) - 14 - small - 4 * (big + 6) - (small + 6);
     if (!view.prompt.empty()) y -= big + 6;
+    const bool missionShown = !view.missionLine.empty() || !view.missionGoal.empty();
+    if (missionShown) y -= big + 6 + small + 6;
 
     // DRIVE  thrusters  cruise  [WARP 1]  warp 2  warp 3
     float x = 10;
@@ -858,6 +869,14 @@ void Renderer::flightHud(const SystemState& state, const CameraState& cam, const
         text(x, y, size, color, s);
         x += size * static_cast<float>(s.size());
     };
+    if (missionShown) {
+        // MISSION  The Galilean moons  2/4  3:12.4
+        // next: land on Ganymede   best 5:01.0
+        text(10, y, big, view.missionTone == HudTone::Go ? kGo : kWhite, view.missionLine);
+        y += big + 6;
+        text(10, y, small, toneColor(view.missionTone), view.missionGoal);
+        y += small + 6;
+    }
     put("DRIVE  ", kDim, big);
     for (int i = 0; i < kDriveTierCount; ++i) {
         std::string name = kDriveTiers[i].name;
@@ -1023,7 +1042,7 @@ void Renderer::hud(const SystemState& state, const CameraState& cam, const ViewO
         text(10, static_cast<float>(height) - 14 - small, small, kDim,
              view.ship ? "W/S throttle   wheel drive   drag/arrows/A D steer   Q/E roll   Tab target   T autopilot   "
                          "G land   Z stop   C view   V leave"
-                       : "H help   Tab next body   M scale mode   Space pause   V ship");
+                       : "H help   Tab next body   M scale mode   Space pause   V ship   I missions");
     }
 
     if (view.help) {
@@ -1036,6 +1055,7 @@ void Renderer::hud(const SystemState& state, const CameraState& cam, const ViewO
             "Left drag    orbit the focus          Wheel, PgUp/PgDn  zoom",
             "F            free flight: WASD move, Q/E down/up, drag to look",
             "V            ship: W/S throttle, wheel drive tier, T autopilot, G land",
+            "I            missions: 1-9, 0 start one; Backspace abandons",
             "M            TRUE / COMPRESSED scale",
             "[ ]          body enlargement (TRUE mode)",
             "O  L  B  X   orbits, labels, small bodies, spin axes",
@@ -1046,12 +1066,22 @@ void Renderer::hud(const SystemState& state, const CameraState& cam, const ViewO
             "Esc          quit",
 #endif
         };
-        float hy = static_cast<float>(height) / 2 - 120;
+        float hy = static_cast<float>(height) / 2 - 130;
         const float hx = static_cast<float>(width) / 2 - 300;
         for (const char* l : lines) {
             text(hx, hy, big, kWhite, l);
             hy += big + 6;
         }
+    }
+
+    // The mission list (I), over the body's details; on a small screen without
+    // the one-line briefs, so it clears the ship's HUD.
+    float py = big > small ? 130 : 110;
+    for (const HudLine& l : view.panel) {
+        if (l.small && big == small) continue;
+        const float size = l.small ? small : big;
+        text(10, py, size, toneColor(l.tone), l.text);
+        py += size + (l.small ? 8 : 4);
     }
 }
 

@@ -14,7 +14,7 @@ Bodies are placed from JPL ephemerides at any instant from 1850 to 2149.
 
 **In a browser:** <https://orrery.play.danielstephenson.dev> (1980 to 2070;
 drag to orbit, pinch or scroll to zoom; **Ship** to fly, with a thumb stick and a
-throttle lever on a touch screen). See [web/README.md](web/README.md).
+throttle lever on a touch screen; **Missions** for timed goals). See [web/README.md](web/README.md).
 
 <p align="center">
   <img src="docs/media/hero.gif" width="640" alt="The inner solar system through 2026 at true distances, planets enlarged 500 times and the Sun 20 times: the planets move along their orbits, the asteroid belt and Jupiter trojans turn, labels follow the bodies">
@@ -90,6 +90,7 @@ ctest --test-dir build --output-on-failure
 ./build/orrery --date 2026-10-18 --export-usda solar-system.usda           # an OpenUSD layer
 ./build/orrery --focus Earth --enlarge 1 --ship --target Mars --autopilot   # fly from Earth to Mars
 ./build/orrery --focus Moon --enlarge 1 --ship --target Moon --land         # land on the Moon
+./build/orrery --mission moon-run                                         # race to the Moon (I lists every mission)
 ```
 
 The browser build (Emscripten, WebGL 2) is described in
@@ -114,6 +115,7 @@ On a machine with no GPU, set `LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe`.
 | wheel, `PgUp` / `PgDn` | zoom |
 | `F` | free flight: `W A S D` to move, `Q` / `E` down / up, drag to look; `F` again to return to orbit |
 | `V` | fly the ship ([below](#the-ship)); `V` again to return to orbit around its target |
+| `I` | the [mission](#missions) list: `1`–`9`, `0` start one, `Backspace` abandons the current one, `I` or `Esc` closes it |
 | `M` | TRUE / COMPRESSED scale |
 | `[` / `]` | body enlargement in TRUE mode |
 | `O` `L` `B` `X` | orbits, labels, small bodies, spin axes |
@@ -182,6 +184,36 @@ seconds of flight: `--date 2026-11-24 --focus Moon --enlarge 1 --ship --target M
 
 In the browser, the toolbar's **Ship** button boards the ship. On a touch screen, a thumb stick steers, a throttle lever sets the throttle, and buttons do the rest. On a desktop they are hidden unless the **Joystick** toggle is on ([web/README.md](web/README.md)).
 
+## Missions
+
+| The mission list (`I`) | The Moon run, finished on the landing autopilot |
+|---|---|
+| ![The mission list over the solar system: ten missions numbered 1 to 0, each with its kind, title and a one-line brief](docs/media/missions.png) | ![The ship landed on the Moon with the HUD reading COMPLETE, Moon run, 0:25.0, par 0:24.0, NEW BEST](docs/media/mission_complete.png) |
+
+Ten short goals for the ship, each timed. `I` lists them (the toolbar's
+**Missions** button in the browser), and a number starts one: the ship is put
+at the autopilot's standoff from the start body, facing the first goal, which
+becomes the target. When a goal is done, the target moves on to the next one.
+
+| | Kind | Mission | Goal |
+|---|---|---|---|
+| 1 | tour | The Galilean moons | land on Io, Europa, Ganymede and Callisto, in any order |
+| 2 | tour | Mars and its moons | land on Phobos, Deimos and Mars |
+| 3 | tour | The inner planets | from Earth, land on Mercury, Venus and Mars |
+| 4 | race | Moon run | from Earth, land on the Moon; par 0:24.0 |
+| 5 | race | Pluto dash | from Earth, land on Pluto; par 0:45.0 |
+| 6 | precision | The far side | land on the Moon more than 120° from the point under Earth |
+| 7 | precision | North pole of Mars | land at latitude 80° N or more on Mars |
+| 8 | sightseeing | Skim Saturn | pass within 20,000 km of Saturn's cloud tops, without touching them |
+| 9 | sightseeing | Halley's comet | pass within 10,000 km of Halley |
+| 0 | sightseeing | Catch Voyager 1 | pass within 10,000 km of Voyager 1 |
+
+- **Fair times.** A mission sets its own date (2026-11-24 for all ten), TRUE scale and bodies at their real size, and runs time at real time, so times on one mission compare. Changing the scale, the enlargement or the date abandons it. The clock counts the seconds flown in the ship.
+- **Landings** count when they are soft or hard; a crash, or reaching the Sun or a giant planet, does not. Precision landings count only where they ask, and the HUD says where the ship came down when it misses.
+- **Races.** Mass lock caps everyone's approach the same way, and the landing autopilot flies close to that cap: 24.97 s to the Moon and 45.97 s to Pluto. Par is a second under that. The time is won at the end: under mass lock to within about a kilometre, then thrusters at about 30%, where a hard landing counts. `test_missions` flies that by hand and beats the autopilot by 1.8 s.
+- **Flybys** are measured between steps, so a pass at warp 3, which can cover millions of kilometres in a frame, still counts.
+- **Best times** are kept per device: in the browser's `localStorage`, and on the desktop in `records.txt` under `$XDG_DATA_HOME/orrery` (or `~/.local/share/orrery`; `%APPDATA%\orrery` on Windows; `$ORRERY_RECORDS` overrides it). Headless runs never read or write them.
+
 ## What is drawn, and from what
 
 | Class | Count | Position source |
@@ -244,6 +276,8 @@ The other tests:
 - `test_rotation` checks the body frames built from the IAU rotation elements: each frame is right-handed and orthonormal with +Z on the pole, W = 0 puts the prime meridian on the ascending node, and Earth's pole is 23.44° from ecliptic north with its prime meridian back in place after one sidereal day.
 - `test_csv` covers the catalogue's CSV reader: comment and blank lines, CRLF line ends, empty cells, the fallback for an empty number, and errors that name the file for a ragged row, a missing header, an unknown column or a cell that is not a number.
 - `test_flight` covers the ship: the drive tiers (warp 1 is the speed of light) and spooling up to warp 3, the controls (tier and throttle limits, reverse, all stop, and autopilot needing a present target and giving way to the stick), mass lock bringing a ship flown at Earth at warp down to a soft landing, the three touchdown grades on thrusters (a landed ship sits level; a crash is put back above the surface), the Sun and the giant planets having no surface to land on (lost at any speed; the landing autopilot stops at the standoff), lifting off only with the nose up, a landed ship turning with its body, the landing autopilot setting down on the Moon and climbing out from it, moving with a body inside its influence, steering that keeps the ship's axes orthonormal, autopilot arriving at its standoff from Mars, and the ship's size following its altitude.
+- `test_missions` covers the missions: the list (ten, unique ids, every kind, pars on the races only), every mission's bodies existing and present at its date in the real catalogue with its landings on solid ground, the start pose, a landing tour completing in any order with a crash not counting and the clock stopping at the end, latitude and far-side landings counting only where they ask (and saying why not), a flyby at warp 3 counting across a single step, a race flown by hand beating the landing autopilot, and the best-time records (round trip, damaged lines skipped, only a faster time replacing one).
+- `mission_moon_run` flies the Moon run headless in the app on the landing autopilot and checks that it completes.
 - `render_smoke` renders four views headless (three orbit views and one from the ship) and checks that each frame is lit, with the expected numbers of spheres, points, orbit vertices and labels, and that the ship is drawn in the ship view.
 - CI also opens the exported USD layer with OpenUSD (`tests/check_usda.py`).
 - The browser build's CI checks that the DE440s kernel cut for the web gives the same positions as the full kernel, bit for bit (`tests/check_trim_spk.py`; see [web/README.md](web/README.md)).
@@ -304,6 +338,7 @@ it directly; CI checks it with OpenUSD (`usd-core`).
 - **UTC before 1972** uses TAI − UTC = 10 s, which is an approximation.
 - **Plain labels.** Labels are skipped where they would overlap, and the font is ASCII only.
 - **An arcade ship.** The ship's velocity follows its nose; there is no gravity, orbit or inertia. It stops and lands at the surfaces of the rocky planets, moons and dwarf planets, and flies through asteroids, comets and spacecraft. The Sun and the giant planets are a hard boundary at their drawn radius: there is no atmosphere to fly into, only being put back outside. Autopilot flies straight at the target and does not steer around a body in the way: mass lock slows it, and it lands on that body.
+- **Mission times stay on the device.** There is no shared leaderboard, and a desktop and a browser keep separate records.
 - **Depth precision.** A deep near-to-far range is unavoidable. Far spheres can fall beyond the far plane, but their point markers still show them.
 
 ## Licence
