@@ -1,10 +1,12 @@
-// The ship: drive tiers, spooling, mass lock, landing and crashing, moving
-// with a body, steering and autopilot. All in drawn km, as the app flies it.
+// The ship: drive tiers, spooling, mass lock, landing and crashing (and no
+// landing on the Sun or the giant planets), moving with a body, steering and
+// autopilot. All in drawn km, as the app flies it.
 #include <cmath>
 #include <vector>
 
 #include "check.hpp"
 #include "orrery/flight.hpp"
+#include "orrery/system.hpp"
 
 using namespace orrery;
 
@@ -16,8 +18,8 @@ constexpr double kEarthR = 6371;
 // The Sun at the origin and an Earth 1 au out along +X.
 std::vector<FlightBody> world(Vec3 earthAt = {kAuKm, 0, 0}) {
     std::vector<FlightBody> b(2);
-    b[0] = {{0, 0, 0}, 695700, 1e308, true, {}};
-    b[1] = {earthAt, kEarthR, 25 * kEarthR, true, {}};
+    b[0] = {{0, 0, 0}, 695700, 1e308, true, {}, false};
+    b[1] = {earthAt, kEarthR, 25 * kEarthR, true, {}, true};
     return b;
 }
 
@@ -107,6 +109,47 @@ int main() {
         CHECK(dot(crash.forward, normalize(crash.position - earth)) > 1 - 1e-9 && orthonormal(crash));
     }
 
+    SECTION("no solid surface: the Sun and the giant planets cannot be landed on");
+    {
+        CHECK(!hasSolidSurface(BodyKind::Star, 10));
+        for (long giant : {599L, 699L, 799L, 899L}) CHECK(!hasSolidSurface(BodyKind::Planet, giant));
+        CHECK(hasSolidSurface(BodyKind::Planet, 399) && hasSolidSurface(BodyKind::Planet, 499));
+        CHECK(hasSolidSurface(BodyKind::Moon, 301) && hasSolidSurface(BodyKind::Dwarf, 999));
+
+        // Into the Sun even at a soft-landing speed: lost, put back outside it at rest, pointing out.
+        const double sunR = 695700;
+        Ship ship;
+        ship.place(Vec3{0, -(sunR + 20), 0}, {0, 1, 0});
+        ship.setThrottle(0.03);  // 60 m/s
+        for (double t = 0; t < 600 && ship.touchdown().grade == Touchdown::None; t += kDt) {
+            ship.step(kDt, {}, world());
+            CHECK(length(ship.position) >= sunR);
+        }
+        CHECK_MSG(ship.touchdown().grade == Touchdown::Lost && ship.touchdown().body == 0,
+                  std::to_string(ship.touchdown().grade));
+        CHECK(ship.landed() < 0 && ship.speed == 0 && ship.throttle() == 0);
+        CHECK_MSG(std::fabs(ship.altitude() - 0.25 * sunR) < 0.01 * sunR, std::to_string(ship.altitude()));
+        CHECK(dot(ship.forward, normalize(ship.position)) > 1 - 1e-9 && orthonormal(ship));
+
+        // The landing autopilot to Jupiter stops at the standoff instead.
+        std::vector<FlightBody> bodies = world();
+        const double jupR = 69911;
+        const Vec3 jupiter{5.2 * kAuKm, 0, 0};
+        bodies.push_back({jupiter, jupR, 25 * jupR, true, {}, false});
+        ship.place(jupiter + Vec3{0, 0, 30 * jupR}, {0, 0, 1});
+        ship.setTarget(2);
+        CHECK(ship.engageLanding(true));
+        double t = 0;
+        while (ship.autopilot() && t < 120) {
+            ship.step(kDt, {}, bodies);
+            CHECK(!ship.landing() && ship.touchdown().grade == Touchdown::None);
+            t += kDt;
+        }
+        CHECK_MSG(ship.arrived() == 2 && ship.landed() < 0, std::to_string(t) + " s");
+        const double dist = length(ship.position - jupiter);
+        CHECK_MSG(std::fabs(dist - Ship::standoff(bodies[2])) < 0.05 * Ship::standoff(bodies[2]), std::to_string(dist));
+    }
+
     SECTION("landed: throttle alone does not move the ship; nose up and throttle lifts off");
     {
         const Vec3 earth{kAuKm, 0, 0};
@@ -148,7 +191,7 @@ int main() {
     {
         std::vector<FlightBody> bodies = world();
         const Vec3 earth{kAuKm, 0, 0}, moonAt = earth + Vec3{384400, 0, 0};
-        bodies.push_back({moonAt, 1737.4, 12 * 1737.4, true, {}});
+        bodies.push_back({moonAt, 1737.4, 12 * 1737.4, true, {}, true});
         Ship ship;
         CHECK(!ship.engageLanding(true));  // no target
         ship.place(earth + Vec3{0, 0, 30 * kEarthR}, {0, 0, 1});
@@ -271,7 +314,7 @@ int main() {
     {
         std::vector<FlightBody> bodies = world();
         const Vec3 mars{-1.5 * kAuKm, 0.2 * kAuKm, 0};
-        bodies.push_back({mars, 3390, 25 * 3390, true, {}});
+        bodies.push_back({mars, 3390, 25 * 3390, true, {}, true});
         Ship ship;
         ship.place(Vec3{kAuKm, 0, 0} + Vec3{0, 0, 30 * kEarthR}, {0, 0, 1});  // facing away
         ship.setTarget(2);

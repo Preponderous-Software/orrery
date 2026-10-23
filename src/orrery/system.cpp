@@ -47,6 +47,10 @@ const char* kindName(BodyKind kind) {
     return "?";
 }
 
+bool hasSolidSurface(BodyKind kind, long naif) {
+    return kind != BodyKind::Star && naif != 599 && naif != 699 && naif != 799 && naif != 899;
+}
+
 SolarSystem::SolarSystem(const std::string& dataDir, const std::string& kernelPath) {
     spk_ = std::make_unique<SpkFile>(kernelPath.empty() ? dataDir + "/kernels/de440s.bsp" : kernelPath);
     const std::string catalog = dataDir + "/catalog/";

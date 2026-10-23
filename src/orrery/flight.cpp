@@ -134,6 +134,7 @@ void Ship::fly(double dt, const std::vector<FlightBody>& bodies) {
     // ---- autopilot: turn to the target, choose the drive, slow to a stop at the standoff
     if (autopilot_ && dt > 0) {
         const FlightBody& t = bodies[static_cast<size_t>(target_)];
+        if (!t.solid) landing_ = false;  // nothing to land on: stop at the standoff
         const Vec3 rel = t.centre - position;
         const double dist = length(rel);
         Vec3 want = dist > 0 ? rel / dist : forward;
@@ -276,13 +277,15 @@ void Ship::fly(double dt, const std::vector<FlightBody>& bodies) {
 }
 
 // Contact while moving into a surface: the speed into it grades the touchdown.
-// Soft or hard, the ship sits down level on the surface; a crash puts it back
-// above the surface, at rest and pointing straight up.
+// Soft or hard, the ship sits down level on the surface; a crash, or any
+// contact with a body that has no solid surface, puts it back above the
+// surface, at rest and pointing straight up.
 void Ship::contact(int body, const FlightBody& b, const Vec3& out) {
     const double impact = -dot(forward * speed, out);
     touchdown_.body = body;
     touchdown_.impactKmPerS = impact;
-    touchdown_.grade = impact <= kSoftLandingKmPerS   ? Touchdown::Soft
+    touchdown_.grade = !b.solid                       ? Touchdown::Lost
+                       : impact <= kSoftLandingKmPerS ? Touchdown::Soft
                        : impact <= kHardLandingKmPerS ? Touchdown::Hard
                                                       : Touchdown::Crash;
     speed = 0;
@@ -290,7 +293,7 @@ void Ship::contact(int body, const FlightBody& b, const Vec3& out) {
     autopilot_ = false;
     landing_ = false;
     climbFrom_ = -1;
-    if (touchdown_.grade == Touchdown::Crash) {
+    if (touchdown_.grade == Touchdown::Crash || touchdown_.grade == Touchdown::Lost) {
         landed_ = -1;
         position = b.centre + out * (b.radius * (1 + kCrashRadii) + size_);
         const Vec3 side = std::fabs(dot(forward, out)) < 0.99 ? forward : up;

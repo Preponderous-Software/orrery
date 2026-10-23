@@ -115,5 +115,9 @@ private:
 };
 
 const char* kindName(BodyKind kind);
+// Whether a body has a solid surface to land on: not the Sun, and not Jupiter,
+// Saturn, Uranus or Neptune (NAIF 599, 699, 799, 899), whose IAU radius is
+// the 1 bar level in their atmospheres rather than ground.
+bool hasSolidSurface(BodyKind kind, long naif);
 
 }  // namespace orrery

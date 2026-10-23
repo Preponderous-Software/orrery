@@ -263,6 +263,7 @@ std::vector<FlightBody> Renderer::flightBodies(const SystemState& state) const {
         fb.radius = drawnRadius_[i];
         fb.present = state.valid[i];
         sys_.frame(static_cast<int>(i), state.jdTdb, fb.frame);  // a landed ship turns with its body
+        fb.solid = hasSolidSurface(bodies[i].kind, bodies[i].naif);
         // The Sun holds everything; a planet its moon system; a moon a few radii.
         if (i == 0) {
             fb.influence = std::numeric_limits<double>::infinity();
@@ -895,6 +896,10 @@ void Renderer::flightHud(const SystemState& state, const CameraState& cam, const
         put("HARD LANDING on " + name(td.body) + "  " + verticalText(td.impactKmPerS), kWarn, big);
     } else if (td.grade == Touchdown::Crash) {
         put("CRASHED into " + name(td.body) + " at " + verticalText(td.impactKmPerS), kAlarm, big);
+    } else if (td.grade == Touchdown::Lost) {
+        put(bodies[static_cast<size_t>(td.body)].kind == BodyKind::Star ? "BURNED UP in " + name(td.body)
+                                                                         : "LOST in " + name(td.body) + "'s clouds",
+            kAlarm, big);
     } else if (ship.arrived() >= 0) {
         put("ARRIVED at " + name(ship.arrived()), kGo, big);
     }
@@ -903,7 +908,7 @@ void Renderer::flightHud(const SystemState& state, const CameraState& cam, const
     // TARGET Mars  0.512 au  ETA 4 min 13 s
     x = 10;
     if (cam.focus >= 0 && state.valid[static_cast<size_t>(cam.focus)]) {
-        const FlightBody target{drawn_[static_cast<size_t>(cam.focus)], drawnRadius_[static_cast<size_t>(cam.focus)], 0, true, {}};
+        const FlightBody target{drawn_[static_cast<size_t>(cam.focus)], drawnRadius_[static_cast<size_t>(cam.focus)], 0, true, {}, true};
         const Vec3 rel = target.centre - ship.position;
         const double dist = length(rel);
         put("TARGET ", kDim, big);
@@ -922,6 +927,8 @@ void Renderer::flightHud(const SystemState& state, const CameraState& cam, const
         near = "on " + name(ship.landed()) + ": nose up and throttle to lift off";
     } else if (td.grade == Touchdown::Crash) {
         near += "   the ship was put back above the surface";
+    } else if (td.grade == Touchdown::Lost) {
+        near += "   no solid surface: put back outside it";
     } else if (ship.nearest() >= 0 && ship.climb() != 0) {
         near += (ship.climb() < 0 ? "   descending " : "   climbing ") + verticalText(ship.climb());
     }

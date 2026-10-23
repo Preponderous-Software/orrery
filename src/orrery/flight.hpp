@@ -38,6 +38,7 @@ struct FlightBody {
     double influence = 0;   // the ship moves with the body inside this distance; 0 = never
     bool present = false;   // has a position at this date
     BodyFrame frame;        // the body's axes at this date; a landed ship turns with them
+    bool solid = true;      // has a surface to land on; the Sun and the giant planets do not
 };
 
 // This step's stick and throttle input.
@@ -54,12 +55,13 @@ constexpr double kLockedFloorKmPerS = 0.05;
 
 // Touchdown: the speed into the surface at contact grades the landing. These
 // are game thresholds, not physics: on thrusters (2 km/s) a soft landing is
-// under 6% throttle, a crash anything over 30%.
+// under 6% throttle, a crash anything over 30%. A body with no solid surface
+// cannot be landed on: reaching its drawn radius at any speed loses the ship.
 constexpr double kSoftLandingKmPerS = 0.12;
 constexpr double kHardLandingKmPerS = 0.6;
 
 struct Touchdown {
-    enum Grade { None, Soft, Hard, Crash };
+    enum Grade { None, Soft, Hard, Crash, Lost };  // Lost: into a body with no solid surface
     Grade grade = None;
     int body = -1;
     double impactKmPerS = 0;  // speed into the surface at contact
@@ -82,7 +84,8 @@ public:
     // surface it first climbs straight up.
     void setTarget(int body) { target_ = body; if (body < 0) autopilot_ = false; }
     bool engageAutopilot(bool on);
-    // Landing autopilot: flies to the target and sets down on it softly.
+    // Landing autopilot: flies to the target and sets down on it softly. A
+    // target with no solid surface gets the plain autopilot's standoff instead.
     bool engageLanding(bool on);
 
     Vec3 position;
@@ -105,7 +108,7 @@ public:
     int massLock() const { return massLock_; }    // the body holding the drive back, or -1
     int landed() const { return landed_; }        // the body the ship sits on, or -1
     // The last contact with a surface, kept until the ship next moves (a crash
-    // until it moves again after being put back above the surface).
+    // or a loss until it moves again after being put back above the surface).
     const Touchdown& touchdown() const { return touchdown_; }
     int arrived() const { return arrived_; }      // the target autopilot last reached, or -1
     // Where autopilot stops: a few radii out from the target.
