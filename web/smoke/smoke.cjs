@@ -8,7 +8,10 @@
 // camera, that zooming works (the wheel on the desktop, a two-finger pinch on
 // the phone) and that the toolbar changes the focus. Then it boards the ship
 // from the toolbar and flies it with the on-screen controls (the throttle lever,
-// the stick, a drive button, Land and Stop) and leaves again. Screenshots go to OUT_DIR.
+// the stick, a drive button, Land and Stop) and leaves again. Last, the
+// Missions sheet: it lists the missions with a best time (loaded as the page
+// loads saved records), starts one in the ship, and Abandon ends it.
+// Screenshots go to OUT_DIR.
 // --phone uses Playwright's iPhone 13 profile (touch, 390x664, DPR 3).
 const fs = require('fs');
 const path = require('path');
@@ -230,6 +233,33 @@ async function shot(page, name) {
     await page.locator('#leave').click();
     await page.waitForFunction(() => window.orrery.status().ship === false, null, { timeout: 10000 });
     check(!(await page.locator('#flight').isVisible()), 'Exit returns to the orbit view and hides the controls');
+
+    // Missions: a best time as the page would load it from localStorage, then the sheet.
+    await page.evaluate(() => window.orrery.loadRecords('moon-run 21.5\n'));
+    await page.locator('#missions-button').click();
+    check(await page.locator('#missions').isVisible(), 'the Missions button opens the mission list');
+    const items = await page.locator('#mission-list button').count();
+    check(items === 10, `it lists the ten missions (${items})`);
+    const moonRun = page.locator('#mission-list button[data-id="moon-run"]');
+    const moonText = await moonRun.innerText();
+    check(moonText.includes('best 0:21.5') && moonText.includes('par 0:24.0'), 'Moon run shows its best time and par');
+    await page.evaluate(() => window.orrery.hold(1));
+    await page.waitForTimeout(200);
+    await page.screenshot({ path: path.join(out, 'missions-page.png') });
+    await page.evaluate(() => window.orrery.hold(0));
+    await moonRun.click();
+    await page.waitForFunction(() => window.orrery.status().mission === 'moon-run', null, { timeout: 10000 });
+    const run = await status();
+    check(run.ship && run.mode === 'true' && run.focusName === 'Moon' && run.missionGoals === 1 &&
+      run.date.startsWith('2026-11-24'), 'picking Moon run starts it in the ship, at its date, aimed at the Moon');
+    check(!(await page.locator('#missions').isVisible()), 'and closes the list');
+    await shot(page, 'mission');
+    await page.locator('#missions-button').click();
+    await page.locator('#abandon').click();
+    await page.waitForFunction(() => window.orrery.status().mission === '', null, { timeout: 10000 });
+    check(true, 'Abandon ends the mission');
+    await page.locator('#missions-close').click();
+    check(!(await page.locator('#missions').isVisible()), 'the close button hides the list');
 
     check(errors.length === 0, 'no page errors' + (errors.length ? ': ' + errors.join(' | ') : ''));
     console.log('smoke test passed (' + (phone ? 'phone' : 'desktop') + ')');

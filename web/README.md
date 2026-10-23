@@ -27,6 +27,8 @@ either on a push to `main` when the repository variable `ARCADE_ENABLED` is
 
     On a desktop these are hidden, and the keyboard and mouse fly the ship. The **Joystick** toolbar toggle shows them, for a touchscreen laptop for example; the browser remembers the choice. Dragging the canvas also steers, and in the ship the wheel steps the drive tier instead of zooming.
 
+  - **Missions** in the toolbar opens the mission list (`I` on a keyboard): a panel at the top right, a bottom sheet on a phone. Each mission shows its brief, this browser's best time and, for a race, its par; picking one starts it in the ship. **Abandon** ends the current one. Best times are kept in `localStorage` (`orrery.records`): the page loads them into the app (`orrery_load_records`) and saves them again whenever a new best is set.
+
   Keys still work while the canvas has focus. `P` (screenshot), `U` (USD export) and `Esc` (quit) do nothing in a browser.
 - **Text** is drawn at the screen's pixel density (`orrery_ui_scale`), a
   little smaller below 440 CSS pixels so that the HUD fits a phone. The key-hint
@@ -67,7 +69,10 @@ the toolbar changes the focus. It then boards the ship from the toolbar and chec
 that its controls show at once on the phone, but only after the Joystick toggle on
 the desktop. It checks that the throttle lever opens the throttle and stays put, that
 the stick steers and springs back, that a drive button steps the drive, that Land starts the landing autopilot and Stop ends it, and that Exit
-leaves the ship. Screenshots are written to the output directory.
+leaves the ship. Last, it loads a best time as the page would from `localStorage`, and
+checks that **Missions** lists the ten missions with that best time and the race's par,
+that picking the Moon run starts it in the ship at its date aimed at the Moon and closes
+the list, and that **Abandon** ends it. Screenshots are written to the output directory.
 Headless Chromium draws with SwiftShader, which is software WebGL. It runs at
 about 7 to 9 frames a second at 1280 × 747, so its frame rate is a lower bound,
 not what a GPU gives.

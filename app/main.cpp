@@ -10,7 +10,8 @@
 // View options: --yaw DEG --pitch DEG --distance-au AU (drawn), --no-labels, --no-orbits,
 // --no-small-bodies, --no-hud, --axes. Ship: --ship [--drive 1-5] [--throttle F] [--cockpit]
 // [--target NAME [--autopilot | --land]] starts in the ship where the orbit camera would be (with
-// --frames it flies 1/30 s per frame).
+// --frames it flies 1/30 s per frame). --mission ID starts that mission instead (the ship options
+// still apply; --land and --autopilot fly to its first goal); --missions opens the mission list.
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -18,11 +19,15 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <map>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "orrery/missions.hpp"
 #include "orrery/system.hpp"
 #include "orrery/time.hpp"
 #include "renderer.hpp"
@@ -48,7 +53,7 @@ namespace {
 
 // SDL3 scancodes (USB HID usage ids), as Strata reports them.
 enum Key {
-    kA = 4, kB = 5, kC = 6, kD = 7, kE = 8, kF = 9, kG = 10, kH = 11, kJ = 13, kL = 15, kM = 16, kN = 17, kO = 18, kP = 19,
+    kA = 4, kB = 5, kC = 6, kD = 7, kE = 8, kF = 9, kG = 10, kH = 11, kI = 12, kJ = 13, kL = 15, kM = 16, kN = 17, kO = 18, kP = 19,
     kQ = 20, kS = 22, kT = 23, kU = 24, kV = 25, kW = 26, kX = 27, kZ = 29, k1 = 30, k0 = 39, kReturn = 40,
     kEscape = 41, kBackspace = 42, kTab = 43,
     kSpace = 44, kLeftBracket = 47, kRightBracket = 48, kComma = 54, kPeriod = 55, kHome = 74, kPageUp = 75,
@@ -81,6 +86,8 @@ struct Args {
     std::string target;     // ship: the target, if not --focus
     int drive = 1;          // 1 = thrusters .. 5 = warp 3
     double throttle = 0;
+    std::string mission;    // start this mission (an id from missions())
+    bool missionsPanel = false;
 };
 
 int usage() {
@@ -90,6 +97,7 @@ int usage() {
         "              [--yaw DEG] [--pitch DEG] [--distance-au AU] [--no-labels] [--no-orbits]\n"
         "              [--no-small-bodies] [--no-hud] [--axes]\n"
         "              [--ship [--drive 1-5] [--throttle F] [--cockpit] [--target NAME [--autopilot | --land]]]\n"
+        "              [--mission ID] [--missions]\n"
         "       orrery --headless ... --screenshot out.png\n"
         "       orrery --headless ... --frames DIR --count N [--step DAYS] [--yaw-step DEG]\n"
         "       orrery ... --export-usda out.usda\n"
@@ -141,6 +149,8 @@ bool parse(int argc, char** argv, Args& a) {
         else if (k == "--land") a.land = true;
         else if (k == "--drive") a.drive = std::atoi(val().c_str());
         else if (k == "--throttle") a.throttle = std::atof(val().c_str());
+        else if (k == "--mission") a.mission = val();
+        else if (k == "--missions") a.missionsPanel = true;
         else return false;
     }
     return a.width > 0 && a.height > 0 && a.enlarge >= 1 && a.drive >= 1 && a.drive <= kDriveTierCount;
@@ -155,6 +165,34 @@ const char* touchdownName(Touchdown::Grade g) {
         default: return "none";
     }
 }
+
+#if !defined(__EMSCRIPTEN__)
+// Where the desktop build keeps the mission records: $ORRERY_RECORDS, else the
+// user's data directory. The browser build keeps them in the page's storage.
+std::filesystem::path recordsPath() {
+    namespace fs = std::filesystem;
+    if (const char* p = std::getenv("ORRERY_RECORDS"); p && *p) return p;
+#if defined(_WIN32)
+    if (const char* a = std::getenv("APPDATA"); a && *a) return fs::path(a) / "orrery" / "records.txt";
+#else
+    if (const char* x = std::getenv("XDG_DATA_HOME"); x && *x) return fs::path(x) / "orrery" / "records.txt";
+    if (const char* h = std::getenv("HOME"); h && *h) return fs::path(h) / ".local" / "share" / "orrery" / "records.txt";
+#endif
+    return {};
+}
+#endif
+
+#if defined(__EMSCRIPTEN__)
+// A JSON string literal (the mission list's text has no control characters).
+std::string jsonText(const std::string& s) {
+    std::string out = "\"";
+    for (char c : s) {
+        if (c == '"' || c == '\\') out += '\\';
+        out += c;
+    }
+    return out + "\"";
+}
+#endif
 
 std::string rateText(double rate, bool paused) {
     if (paused) return "paused";
@@ -234,13 +272,131 @@ struct World {
     bool boardPending = false;  // board on the next frame, once bodies are laid out
     Vec3 chaseLook, chaseUp;    // the chase camera trails the ship's turns
 
-    void board() {
-        ship.place(renderer->eyeOf(cam), renderer->forwardOf(cam));
+    // ---- missions (I): timed goals for the ship, with the best time kept per device
+    MissionRun mission;
+    std::map<std::string, double> records;
+    std::filesystem::path recordsFile;  // desktop: where the records are saved; empty = not saved
+    int recordsVersion = 0;             // bumped with each new best (the page saves the records then)
+    bool newBest = false;               // the finished mission set a record
+    bool panel = false;                 // the mission list is open
+    int missionPending = -1;            // --mission: start it on the first frame
+    std::string missionNote;            // why the last mission was abandoned
+
+    void board() { boardAt(renderer->eyeOf(cam), renderer->forwardOf(cam)); }
+
+    void boardAt(const Vec3& position, const Vec3& forward) {
+        ship.place(position, forward);
         chaseLook = ship.forward;
         chaseUp = ship.up;
         cam.freeFly = false;
         cam.ship = true;
         view.ship = &ship;
+    }
+
+    // Starts mission `index` at its date, in TRUE scale with bodies at their
+    // real size (so drawn km are real km and times compare), in the ship at the
+    // standoff from its start body, aimed at its first goal.
+    bool startMission(int index) {
+        if (index < 0 || index >= static_cast<int>(missions().size())) return false;
+        const Mission& m = missions()[static_cast<size_t>(index)];
+        CalendarDate c;
+        if (!parseIsoDate(m.date, c)) return false;
+        if (!mission.start(m, [this](const std::string& name) { return sys->find(name); })) return false;
+        jd = std::clamp(utcToTdb(julianDate(c)), sys->firstJd(), sys->lastJd());
+        view.scale.mode = ScaleMode::True;
+        view.scale.enlarge = 1;
+        sys->evaluate(jd, state, view.smallBodies);
+        renderer->layout(state, view.scale);
+        const std::vector<FlightBody> bodies = renderer->flightBodies(state);
+        const int first = mission.goalBody(0);
+        Vec3 position, forward;
+        missionStartPose(bodies[static_cast<size_t>(sys->find(m.start))], bodies[static_cast<size_t>(first)], position,
+                         forward);
+        boardAt(position, forward);
+        ship.setTier(0);
+        cam.focus = first;
+        ship.setTarget(first);
+        ship.step(0, {}, bodies);
+        mission.update(0, ship, bodies);
+        newBest = false;
+        panel = false;
+        missionNote.clear();
+        return true;
+    }
+
+    void abandonMission(const std::string& why) {
+        if (mission.running() && !why.empty()) missionNote = "mission abandoned: " + why;
+        mission.abandon();
+    }
+
+    void finishMission() {
+        const Mission& m = *mission.mission();
+        newBest = recordTime(records, m.id, mission.seconds());
+        std::printf("mission %s complete in %s (%.2f s)%s\n", m.id.c_str(), clockText(mission.seconds()).c_str(),
+                    mission.seconds(), newBest ? ", a new best" : "");
+        if (!newBest) return;
+        ++recordsVersion;
+        if (recordsFile.empty()) return;
+        std::error_code ec;
+        std::filesystem::create_directories(recordsFile.parent_path(), ec);
+        std::ofstream out(recordsFile, std::ios::binary | std::ios::trunc);
+        out << formatRecords(records);
+        if (!out) std::fprintf(stderr, "could not save the mission records to %s\n", recordsFile.string().c_str());
+    }
+
+    void loadRecords() {
+        std::ifstream in(recordsFile, std::ios::binary);
+        if (!in) return;  // none yet
+        std::ostringstream text;
+        text << in.rdbuf();
+        records = parseRecords(text.str());
+    }
+
+    // The HUD's mission line, the goal under it, and the mission list.
+    void missionView() {
+        view.missionLine.clear();
+        view.missionGoal.clear();
+        view.missionTone = HudTone::Plain;
+        view.panel.clear();
+        const Mission* m = mission.mission();
+        auto best = [this](const std::string& id) {
+            const auto it = records.find(id);
+            return it == records.end() ? std::string() : "best " + clockText(it->second);
+        };
+        if (m && mission.complete()) {
+            view.missionLine = "COMPLETE  " + m->title + "  " + clockText(mission.seconds());
+            if (m->parSeconds > 0) {
+                view.missionLine += mission.seconds() <= m->parSeconds ? "  UNDER PAR" : "  par " + clockText(m->parSeconds);
+            }
+            view.missionLine += newBest ? "  NEW BEST" : "  " + best(m->id);
+            view.missionGoal = view.keyHints ? "I for the mission list" : "Missions in the toolbar for the list";
+            view.missionTone = HudTone::Go;
+        } else if (m) {
+            view.missionLine = "MISSION  " + m->title + "  " + std::to_string(mission.goalsDone()) + "/" +
+                               std::to_string(mission.goalCount()) + "  " + clockText(mission.seconds());
+            if (m->parSeconds > 0) view.missionLine += "   par " + clockText(m->parSeconds);
+            const int next = mission.nextGoal();
+            if (!mission.miss().empty()) {
+                view.missionGoal = mission.miss();
+                view.missionTone = HudTone::Warn;
+            } else if (next >= 0) {
+                view.missionGoal = "next: " + m->goals[static_cast<size_t>(next)].text;
+                if (!best(m->id).empty()) view.missionGoal += "   " + best(m->id);
+            }
+        } else if (!missionNote.empty()) {
+            view.missionGoal = missionNote;
+            view.missionTone = HudTone::Warn;
+        }
+        if (!panel) return;
+        view.panel.push_back({"MISSIONS   1-9, 0 start one   Backspace abandons   I closes", false, HudTone::Go});
+        const auto& list = missions();
+        for (size_t i = 0; i < list.size(); ++i) {
+            char buf[160];
+            std::snprintf(buf, sizeof buf, "%zu  %-12s %-20s %s", (i + 1) % 10, list[i].kind.c_str(),
+                          list[i].title.c_str(), best(list[i].id).c_str());
+            view.panel.push_back({buf, false, HudTone::Plain});
+            view.panel.push_back({"   " + list[i].brief, true, HudTone::Dim});
+        }
     }
 
     void disembark() {
@@ -284,13 +440,15 @@ struct World {
         if (cam.distance <= 0) {
             cam.distance = args.distanceAu > 0 ? args.distanceAu * kAuKm : renderer->defaultDistance(cam.focus);
         }
-        if (boardPending) {
+        const bool started = missionPending >= 0 && startMission(missionPending);
+        missionPending = -1;
+        if (boardPending || started) {
+            if (boardPending) board();
             boardPending = false;
-            board();
             ship.setTier(args.drive - 1);
             ship.setThrottle(args.throttle);
             ship.speed = args.throttle * ship.topSpeed();  // already up to speed; mass lock still applies
-            if (!args.target.empty()) cam.focus = sys->find(args.target);
+            if (!args.target.empty() && !started) cam.focus = sys->find(args.target);
             ship.setTarget(cam.focus);
             ship.engageAutopilot(args.autopilot);
             if (args.land) ship.engageLanding(true);
@@ -299,8 +457,24 @@ struct World {
             const std::vector<FlightBody> bodies = renderer->flightBodies(state);
             ship.setTarget(cam.focus);
             ship.step(shipDt, controls, bodies);
+            if (mission.running()) {
+                mission.update(shipDt, ship, bodies);
+                if (mission.complete()) {
+                    finishMission();
+                } else if (mission.nextGoal() >= 0) {
+                    // A goal just done: the target moves on to the next one.
+                    for (int g = 0; g < mission.goalCount(); ++g) {
+                        if (mission.goalDone(g) && mission.goalBody(g) == cam.focus) {
+                            cam.focus = mission.goalBody(mission.nextGoal());
+                            ship.setTarget(cam.focus);
+                            break;
+                        }
+                    }
+                }
+            }
             shipCamera(bodies);
         }
+        missionView();
         view.timeLine = timeLine(jd, rate);
         return renderer->draw(state, cam, view, width, height);
     }
@@ -351,6 +525,14 @@ struct Interactive {
         if (factor > 0 && std::isfinite(factor)) w->cam.distance *= factor;
     }
 
+    // Starts a mission from the list (keys, or the page), at real time.
+    bool startMission(int index) {
+        if (!w->startMission(index)) return false;
+        rateIndex = kRealTimeRate;
+        paused = false;
+        return true;
+    }
+
     // Steps the ship's drive up or down a tier (wheel, PgUp / PgDn).
     void drive(int by) {
         w->ship.engageAutopilot(false);
@@ -366,12 +548,25 @@ struct Interactive {
         if (entering) {
             if (scancode == kReturn) {
                 CalendarDate c;
-                if (parseIsoDate(entry, c)) jd = clampJd(utcToTdb(julianDate(c)));
+                if (parseIsoDate(entry, c)) {
+                    jd = clampJd(utcToTdb(julianDate(c)));
+                    w->abandonMission("the date changed");
+                }
                 entering = false;
             } else if (scancode == kEscape) {
                 entering = false;
             } else if (scancode == kBackspace && !entry.empty()) {
                 entry.pop_back();
+            }
+            return;
+        }
+        if (w->panel) {  // the mission list takes the keys while it is open
+            if (scancode >= k1 && scancode <= k0) {
+                startMission(scancode == k0 ? 9 : scancode - k1);
+            } else if (scancode == kBackspace) {
+                w->abandonMission("");
+            } else if (scancode == kI || scancode == kEscape) {
+                w->panel = false;
             }
             return;
         }
@@ -398,7 +593,12 @@ struct Interactive {
             case kSpace: paused = !paused; break;
             case kComma: rateIndex = std::max(rateIndex - 1, 0); break;
             case kPeriod: rateIndex = std::min(rateIndex + 1, static_cast<int>(sizeof kRates / sizeof kRates[0]) - 1); break;
+            case kI:
+                w->panel = true;
+                w->missionNote.clear();
+                break;
             case kN:
+                w->abandonMission("the date changed");
                 jd = clampJd(utcToTdb(nowUtc()));
                 rateIndex = kRealTimeRate;
                 paused = false;
@@ -407,12 +607,14 @@ struct Interactive {
             case kTab: focus(cycle(sys, w->state, cam.focus, shift ? -1 : 1)); break;
             case kHome: focus(0); break;
             case kM:
+                w->abandonMission("the scale changed");
                 view.scale.mode = view.scale.mode == ScaleMode::True ? ScaleMode::Compressed : ScaleMode::True;
                 renderer.layout(w->state, view.scale);
                 cam.distance = renderer.defaultDistance(cam.focus);
                 break;
             case kLeftBracket:
             case kRightBracket: {
+                w->abandonMission("the bodies' size changed");
                 int e = nearestIndex(kEnlargements, 5, view.scale.enlarge);
                 e = std::clamp(e + (scancode == kRightBracket ? 1 : -1), 0, 4);
                 view.scale.enlarge = kEnlargements[e];
@@ -547,7 +749,8 @@ struct Interactive {
     const char* statusJson() {
         const Body& b = w->sys->bodies()[static_cast<size_t>(w->cam.focus)];
         const Ship& ship = w->ship;
-        char buf[1024];
+        const MissionRun& run = w->mission;
+        char buf[2048];
         std::snprintf(buf, sizeof buf,
                       "{\"frames\":%ld,\"focus\":%d,\"focusName\":\"%s\",\"freeFly\":%s,\"paused\":%s,"
                       "\"rate\":\"%s\",\"date\":\"%s\",\"mode\":\"%s\",\"width\":%d,\"height\":%d,"
@@ -555,7 +758,9 @@ struct Interactive {
                       "\"labels\":%s,\"orbits\":%s,\"help\":%s,\"firstDate\":\"%s\",\"lastDate\":\"%s\","
                       "\"ship\":%s,\"drive\":\"%s\",\"throttle\":%.3f,\"speed\":%.6g,\"autopilot\":%s,"
                       "\"cockpit\":%s,\"shipTriangles\":%d,\"stickX\":%.3f,\"stickY\":%.3f,"
-                      "\"landing\":%s,\"landed\":%d,\"touchdown\":\"%s\",\"impact\":%.6g}",
+                      "\"landing\":%s,\"landed\":%d,\"touchdown\":\"%s\",\"impact\":%.6g,"
+                      "\"missionList\":%s,\"mission\":\"%s\",\"missionDone\":%d,\"missionGoals\":%d,"
+                      "\"missionSeconds\":%.3f,\"missionComplete\":%s,\"newBest\":%s,\"recordsVersion\":%d}",
                       frames, w->cam.focus, b.name.c_str(), w->cam.freeFly ? "true" : "false",
                       paused ? "true" : "false", rateText(kRates[rateIndex], paused).c_str(),
                       formatIsoDate(calendarDate(tdbToUtc(w->jd))).c_str(),
@@ -568,7 +773,10 @@ struct Interactive {
                       kDriveTiers[ship.tier()].name, ship.throttle(), ship.speed, ship.autopilot() ? "true" : "false",
                       w->view.cockpit ? "true" : "false", report.shipTriangles, stickX, stickY,
                       ship.landing() ? "true" : "false", ship.landed(), touchdownName(ship.touchdown().grade),
-                      ship.touchdown().impactKmPerS);
+                      ship.touchdown().impactKmPerS, w->panel ? "true" : "false",
+                      run.mission() ? run.mission()->id.c_str() : "", run.mission() ? run.goalsDone() : 0,
+                      run.mission() ? run.goalCount() : 0, run.seconds(), run.complete() ? "true" : "false",
+                      w->newBest ? "true" : "false", w->recordsVersion);
         status = buf;
         return status.c_str();
     }
@@ -631,7 +839,35 @@ EMSCRIPTEN_KEEPALIVE int orrery_set_date(const char* iso) {
     CalendarDate c;
     if (!gLive || !iso || !parseIsoDate(iso, c)) return 0;
     gLive->w->jd = gLive->clampJd(utcToTdb(julianDate(c)));
+    gLive->w->abandonMission("the date changed");
     return 1;
+}
+// Missions: the list for the page's mission sheet, starting and abandoning
+// one, and the best times, which the page keeps in localStorage.
+EMSCRIPTEN_KEEPALIVE int orrery_mission_count() { return static_cast<int>(missions().size()); }
+EMSCRIPTEN_KEEPALIVE const char* orrery_mission_json(int index) {
+    static std::string json;
+    if (!gLive || index < 0 || index >= orrery_mission_count()) return "{}";
+    const Mission& m = missions()[static_cast<size_t>(index)];
+    const auto it = gLive->w->records.find(m.id);
+    char buf[64];
+    std::snprintf(buf, sizeof buf, ",\"par\":%.3f,\"best\":%.3f}", m.parSeconds,
+                  it == gLive->w->records.end() ? 0.0 : it->second);
+    json = "{\"id\":" + jsonText(m.id) + ",\"kind\":" + jsonText(m.kind) + ",\"title\":" + jsonText(m.title) +
+           ",\"brief\":" + jsonText(m.brief) + buf;
+    return json.c_str();
+}
+EMSCRIPTEN_KEEPALIVE int orrery_start_mission(int index) { return gLive && gLive->startMission(index) ? 1 : 0; }
+EMSCRIPTEN_KEEPALIVE void orrery_abandon_mission() {
+    if (gLive) gLive->w->abandonMission("");
+}
+EMSCRIPTEN_KEEPALIVE const char* orrery_records() {
+    static std::string text;
+    text = gLive ? formatRecords(gLive->w->records) : "";
+    return text.c_str();
+}
+EMSCRIPTEN_KEEPALIVE void orrery_load_records(const char* text) {
+    if (gLive && text) gLive->w->records = parseRecords(text);
 }
 EMSCRIPTEN_KEEPALIVE int orrery_body_count() { return gLive ? static_cast<int>(gLive->w->sys->bodies().size()) : 0; }
 EMSCRIPTEN_KEEPALIVE const char* orrery_body_name(int body) {
@@ -725,7 +961,17 @@ int main(int argc, char** argv) {
 
         world->width = args.width;
         world->height = args.height;
-        world->boardPending = args.ship;
+        world->boardPending = args.ship && args.mission.empty();
+        world->panel = args.missionsPanel;
+        if (!args.mission.empty()) {
+            world->missionPending = findMission(args.mission);
+            if (world->missionPending < 0) {
+                std::fprintf(stderr, "no mission '%s'; the missions are:", args.mission.c_str());
+                for (const Mission& m : missions()) std::fprintf(stderr, " %s", m.id.c_str());
+                std::fputc('\n', stderr);
+                return 2;
+            }
+        }
         view.cockpit = args.cockpit;
         auto frame = [&](const std::string& rate) { return world->frame(rate); };
 
@@ -792,7 +1038,15 @@ int main(int argc, char** argv) {
         }
 
         // ---- interactive
+#if !defined(__EMSCRIPTEN__)
+        world->recordsFile = recordsPath();  // headless runs never read or write records
+        world->loadRecords();
+#endif
         auto* live = new Interactive(std::move(world), rateIndexFor(args.rate));
+        if (live->w->missionPending >= 0) {
+            live->rateIndex = kRealTimeRate;
+            live->paused = false;
+        }
 #if defined(__EMSCRIPTEN__)
         // The browser runs the frames (requestAnimationFrame); main returns and
         // the session lives on (it is never freed: the page owns its lifetime).
