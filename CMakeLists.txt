@@ -18,7 +18,8 @@ option(ORRERY_BUILD_TESTS "Build the tests" ${ORRERY_BUILD_TESTS_DEFAULT})
 option(ORRERY_WITH_STRATA "Build the renderer app on the Strata engine" ON)
 option(ORRERY_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 
-# The Strata commit the app is built against (strata.ref). Pinned; bump deliberately.
+# The Strata commit the app is built against (strata.ref: the v0.6.0 tag).
+# Pinned; bump deliberately.
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/strata.ref" ORRERY_STRATA_REF_DEFAULT)
 string(STRIP "${ORRERY_STRATA_REF_DEFAULT}" ORRERY_STRATA_REF_DEFAULT)
 set(ORRERY_STRATA_REF "${ORRERY_STRATA_REF_DEFAULT}" CACHE STRING "Strata git ref (a full commit SHA)")
