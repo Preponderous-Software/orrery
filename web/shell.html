@@ -149,6 +149,8 @@
     <button id="help" class="wide" title="Keyboard help (H)" aria-pressed="false">Keys</button>
   </div>
 </nav>
+<!-- ?bench: a scripted frame-rate run (web/bench.js); it must load before the engine. -->
+<script src="bench.js"></script>
 <script>
   // SDL3 scancodes (USB HID usage ids), as orrery_key takes them.
   const KEY = { tab: 43, space: 44, comma: 54, period: 55, n: 17, m: 16, l: 15, o: 18, h: 11, v: 25,
@@ -220,6 +222,26 @@
     window.orreryReady = true;
     setInterval(sync, 250);
     sync();
+    if (window.StrataBench && StrataBench.requested) bench();
+  }
+
+  // ?bench: the whole solar system on 2026-01-01 with time paused, focused on the Sun, the
+  // camera turning once around it, closing in and back out. orrery_orbit and orrery_zoom are
+  // relative, so each frame moves the camera by the path's step since the last; the path
+  // depends only on the time into the run, so runs on different devices are comparable.
+  function bench() {
+    const turn = 360 / 0.3;  // orrery_orbit's pixels for a full turn
+    const dist = (u) => 1 - 0.35 * Math.sin(Math.PI * u);
+    let at = 0;
+    StrataBench.run({
+      name: 'orrery', scene: 'the Sun on 2026-01-01, time paused, one orbit', canvas,
+      setup: () => {
+        api.setDate('2026-01-01');
+        api.focus(0);
+        if (!api.status().paused) press(KEY.space);
+      },
+      path: (u) => { api.orbit(turn * (u - at), 0); api.zoom(dist(u) / dist(at)); at = u; },
+    });
   }
   // The C++ side starts its loop at the end of main(); the exports exist from then on.
   Module.onRuntimeInitialized = () => { const wait = () => (Module._orrery_body_count() > 0 ? ready() : setTimeout(wait, 30)); wait(); };

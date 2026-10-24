@@ -49,9 +49,23 @@ cmake --build build-web -j4
 cd build-web && python3 -m http.server 8000      # open http://localhost:8000/index.html
 ```
 
-The build writes `index.html`, `index.js`, `index.wasm` and `index.data`. These
-four files are the whole site. C++ exceptions use Strata's mode
+The build writes `index.html`, `index.js`, `index.wasm` and `index.data`, and
+copies `web/bench.js` (the `?bench` mode) next to them. These five files are the
+whole site. C++ exceptions use Strata's mode
 (`STRATA_WASM_EXCEPTIONS`, `wasm` by default) for the whole module.
+
+## Measuring the frame rate
+
+Open the page with `?bench` (<https://orrery.play.danielstephenson.dev/?bench>)
+on the device to measure. It sets the date to 2026-01-01, pauses time, focuses
+the Sun and turns the camera once around it, closing in and back out, for 15
+seconds after a short warm-up. Then it shows the frame rate, the frame time
+(median and p95), the page's own work per frame, the GPU time where the browser
+offers WebGL 2 timer queries, the canvas size and device pixel ratio and the
+GPU's name, with a button that copies it all as text. `?bench=30` runs for 30
+seconds. Nothing is sent anywhere, and the run sets no mission records.
+`web/smoke/bench.cjs` checks in CI that a run finishes and shows its card on
+both profiles; it keeps no numbers, as headless Chromium draws on the CPU.
 
 ## Smoke test
 

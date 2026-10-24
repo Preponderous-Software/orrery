@@ -84,7 +84,7 @@ jobs:
       - name: Assemble the site
         run: |
           mkdir -p web-site
-          cp build-web/index.html build-web/index.js build-web/index.wasm build-web/index.data web-site/
+          cp build-web/index.html build-web/index.js build-web/index.wasm build-web/index.data build-web/bench.js web-site/
           grep -q 'danielstephenson.dev/play' web-site/index.html
           ls -la web-site
           echo "site: $(du -sh web-site | cut -f1) on disk"
@@ -101,6 +101,11 @@ jobs:
           sleep 1
           node web/smoke/smoke.cjs http://127.0.0.1:8080/ smoke-out/desktop
           node web/smoke/smoke.cjs http://127.0.0.1:8080/ smoke-out/phone --phone
+
+      - name: Bench mode completes and shows its card (desktop, iPhone 13 profile)
+        run: |
+          node web/smoke/bench.cjs "http://127.0.0.1:8080/?bench=3" smoke-out/bench-desktop
+          node web/smoke/bench.cjs "http://127.0.0.1:8080/?bench=3" smoke-out/bench-phone --phone
 
       - name: Upload smoke screenshots
         if: always()
