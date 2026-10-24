@@ -219,6 +219,14 @@ async function shot(page, name) {
     check(steering.stickX > 0.5, `the stick held right steers (stick x ${steering.stickX})`);
     check((await status()).stickX === 0, 'let go, the stick centres');
     // Land: the landing autopilot takes the ship down to the target; Stop hands it back.
+    // Saturn has no surface, so the autopilot would drop the landing on its next
+    // frame (#17) and the check below could miss it. Target Titan first.
+    const titan = await page.evaluate(() => {
+      for (let i = 0; i < window.orrery.count(); i++) if (window.orrery.name(i) === 'Titan') return i;
+      return -1;
+    });
+    await page.locator('#body').selectOption(String(titan));
+    await page.waitForFunction(() => window.orrery.status().focusName === 'Titan', null, { timeout: 10000 });
     await page.locator('#land').click();
     await page.waitForFunction(() => window.orrery.status().landing === true, null, { timeout: 10000 });
     check(await page.locator('#land').getAttribute('aria-pressed') === 'true', 'Land starts the landing autopilot');
