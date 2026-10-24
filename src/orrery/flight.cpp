@@ -18,6 +18,7 @@ constexpr double kLandingFinalKmPerS = 0.03; // the landing autopilot's speed at
 constexpr double kClimbRadii = 0.5;          // from a surface, autopilot climbs this many radii first
 constexpr double kLiftOffDot = 0.1;          // landed, the nose must point this far up to lift off
 constexpr double kCrashRadii = 0.25;         // a crashed ship is put back this many radii above the surface
+constexpr double kAutopilotHeat = 0.6;       // in air, autopilot flies at this fraction of the burn speed (heat ~0.2)
 
 // Eases a magnitude toward another in log space, so the drive takes about as
 // long to climb from 2 km/s to 2,000 c as from 2 to 200 km/s.
@@ -56,6 +57,9 @@ void Ship::place(const Vec3& p, const Vec3& fwd) {
     climbFrom_ = -1;
     landed_ = -1;
     touchdown_ = {};
+    air_ = -1;
+    airDensity_ = 0;
+    heat_ = 0;
 }
 
 void Ship::setTier(int tier) { tier_ = std::clamp(tier, 0, kDriveTierCount - 1); }
@@ -75,6 +79,29 @@ bool Ship::engageLanding(bool on) {
     climbFrom_ = autopilot_ ? landed_ : -1;
     if (autopilot_) arrived_ = -1;
     return autopilot_;
+}
+
+// The fastest the autopilot flies here, in drawn km/s: a cool speed in any
+// air, and above an air it is heading into, a ramp down to that speed at its top.
+double Ship::airCap(const std::vector<FlightBody>& bodies) const {
+    double cap = 1e308;
+    for (const FlightBody& b : bodies) {
+        if (!b.present || b.radius <= 0 || !b.air.present()) continue;
+        const Vec3 rel = b.centre - position;
+        const double alt = (length(rel) - b.radius) * b.realPerDrawn;  // real km
+        const double top = b.air.topKm();
+        const double cool = kAutopilotHeat * burnSpeed(b.air.density(std::min(alt, top - 1e-9)));
+        if (alt < top) {
+            cap = std::min(cap, cool / b.realPerDrawn);
+        } else {
+            // Heading into it: the nose's line passes through the air.
+            const double along = dot(forward, rel), edge = b.radius + top / b.realPerDrawn;
+            if (along > 0 && dot(rel, rel) - along * along < edge * edge) {
+                cap = std::min(cap, (kAutopilotApproach * (alt - top) + cool) / b.realPerDrawn);
+            }
+        }
+    }
+    return cap;
 }
 
 void Ship::ride(const std::vector<FlightBody>& bodies) {
@@ -158,8 +185,9 @@ void Ship::fly(double dt, const std::vector<FlightBody>& bodies) {
             turn(0, 0, 0);  // re-orthonormalise
         }
         const double aligned = angle < 0.3 ? std::cos(angle) : 0.0;
+        const double cool = airCap(bodies);
         if (climbFrom_ >= 0) {  // about one radius per second
-            const double desired = bodies[static_cast<size_t>(climbFrom_)].radius;
+            const double desired = std::min(bodies[static_cast<size_t>(climbFrom_)].radius, cool);
             int tier = 0;
             while (tier < kDriveTierCount - 1 && kDriveTiers[tier].topKmPerS < desired) ++tier;
             tier_ = tier;
@@ -167,7 +195,8 @@ void Ship::fly(double dt, const std::vector<FlightBody>& bodies) {
         } else if (landing_) {
             // Down to the surface, slowing to a soft touchdown; contact() ends it.
             const double remaining = std::max(dist - t.radius - 0.5 * size_, 0.0);
-            const double desired = aligned > 0 ? std::max(kAutopilotApproach * remaining * aligned, kLandingFinalKmPerS) : 0.0;
+            const double desired =
+                aligned > 0 ? std::min(std::max(kAutopilotApproach * remaining * aligned, kLandingFinalKmPerS), cool) : 0.0;
             int tier = 0;
             while (tier < kDriveTierCount - 1 && kDriveTiers[tier].topKmPerS < desired) ++tier;
             tier_ = tier;
@@ -178,7 +207,7 @@ void Ship::fly(double dt, const std::vector<FlightBody>& bodies) {
             autopilot_ = false;
             arrived_ = target_;
         } else {
-            const double desired = kAutopilotApproach * (dist - standoff(t)) * aligned;
+            const double desired = std::min(kAutopilotApproach * (dist - standoff(t)) * aligned, cool);
             int tier = 0;
             while (tier < kDriveTierCount - 1 && kDriveTiers[tier].topKmPerS < desired) ++tier;
             tier_ = tier;
@@ -224,6 +253,30 @@ void Ship::fly(double dt, const std::vector<FlightBody>& bodies) {
     const double allowed = std::max(cap, tier_ > 0 ? kLockedFloorKmPerS : kDriveTiers[0].topKmPerS);
     if (std::fabs(speed) > allowed) speed = sign(speed) * allowed;
     massLock_ = tier_ > 0 && capBody >= 0 && cap < std::fabs(wanted) ? capBody : -1;
+
+    // ---- air: drag slows the ship, and speed in it heats the ship
+    air_ = -1;
+    airDensity_ = 0;
+    double realPerDrawn = 1;
+    for (int i = 0; i < n; ++i) {
+        const FlightBody& b = bodies[static_cast<size_t>(i)];
+        if (!b.present || b.radius <= 0 || !b.air.present()) continue;
+        const double rho = b.air.density((length(position - b.centre) - b.radius) * b.realPerDrawn);
+        if (rho > airDensity_) {
+            air_ = i;
+            airDensity_ = rho;
+            realPerDrawn = b.realPerDrawn;
+        }
+    }
+    double heating = 0;  // where the heat is heading: (speed / burn speed)^3
+    if (air_ >= 0 && speed != 0 && dt > 0) {
+        double v = std::fabs(speed) * realPerDrawn * 1000;  // real m/s
+        v /= 1 + airDensity_ * v * dt / (2 * kBallisticKgPerM2);  // dv/dt = -rho v^2 / 2B, solved over the step
+        speed = sign(speed) * v / 1000 / realPerDrawn;
+        heating = std::pow(v / 1000 / burnSpeed(airDensity_), 3);
+    }
+    if (dt > 0) heat_ += (heating - heat_) * (1 - std::exp(-dt / kHeatSeconds));
+    if (heat_ >= 1 && air_ >= 0) burnUp(air_, bodies[static_cast<size_t>(air_)], std::fabs(speed) * realPerDrawn);
 
     // ---- move, and stop at any surface
     position += forward * (speed * dt);
@@ -274,6 +327,30 @@ void Ship::fly(double dt, const std::vector<FlightBody>& bodies) {
         localForward_ = toLocal(f, forward);
         localUp_ = toLocal(f, up);
     }
+}
+
+// Too fast in a body's air: the ship is put back above the air, at rest,
+// cold and pointing straight up.
+void Ship::burnUp(int body, const FlightBody& b, double speedKmPerS) {
+    touchdown_.body = body;
+    touchdown_.impactKmPerS = speedKmPerS;
+    touchdown_.grade = Touchdown::Burned;
+    speed = 0;
+    throttle_ = 0;
+    autopilot_ = false;
+    landing_ = false;
+    climbFrom_ = -1;
+    landed_ = -1;
+    air_ = -1;
+    airDensity_ = 0;
+    heat_ = 0;
+    Vec3 out = position - b.centre;
+    out = length(out) > 0 ? normalize(out) : -forward;
+    const double above = std::max(kCrashRadii * b.radius, 1.25 * b.air.topKm() / b.realPerDrawn);
+    position = b.centre + out * (b.radius + above + size_);
+    const Vec3 side = std::fabs(dot(forward, out)) < 0.99 ? forward : up;
+    forward = out;
+    up = normalize(side - out * dot(side, out));
 }
 
 // Contact while moving into a surface: the speed into it grades the touchdown.

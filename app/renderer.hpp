@@ -1,6 +1,7 @@
 // Draws one frame of the solar system with Strata.
 #pragma once
 
+#include <array>
 #include <deque>
 #include <string>
 #include <vector>
@@ -90,6 +91,7 @@ private:
     bool placeTextured(size_t body, const SystemState& state, const Vec3& origin);
     void addShip(const Ship& ship, const Vec3& origin);
     void addDust(const Ship& ship, const Vec3& origin);
+    std::array<float, 3> skyColor(const Ship& ship) const;
     void addTargetMarker(int body, const CameraState& cam, const Vec3& origin, int width, int height);
     // Pixel position of a camera-relative point; false behind the camera.
     bool project(const Vec3& rel, int width, int height, float& sx, float& sy, float& clipW) const;

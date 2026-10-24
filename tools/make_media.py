@@ -5,7 +5,8 @@
         uv run --python 3.12 --with pillow==11.0.0 tools/make_media.py build/orrery
 
 Writes docs/media/*.png (mission_complete.png is the last frame of a mission flown on the landing
-autopilot), docs/media/hero.gif, earth_day.gif, ship.gif and landing.gif. Every image is a plain
+autopilot; air.png puts together the last frames of four landings through air, and reentry.png is
+one frame of the descent to Earth), docs/media/hero.gif, earth_day.gif, ship.gif and landing.gif. Every image is a plain
 `orrery --headless` run; the command for each is printed.
 """
 from __future__ import annotations
@@ -133,6 +134,29 @@ def main() -> int:
         out = MEDIA / "mission_complete.png"
         Image.open(last).save(out)
         print(f"wrote {out}")
+
+    # Landing through air: the landing autopilot to Venus, Earth, Mars and
+    # Titan, each from its start pose to the ground, and the last frame of
+    # each (landed, under that sky) in a 2 x 2 grid. The descent to Earth
+    # gives reentry.png too: frame 1000, 57 km up at 10 km/s and 27% heat.
+    landed = []
+    for body, count in (("Venus", 4000), ("Earth", 1500), ("Mars", 1500), ("Titan", 4000)):
+        with tempfile.TemporaryDirectory() as tmp:
+            run(binary, ["--date", "2026-11-24", "--enlarge", "1", "--ship", "--target", body,
+                         "--land", "--no-small-bodies", "--frames", tmp, "--count", str(count), "--step", "0"],
+                size=(640, 360))
+            frames = sorted(Path(tmp).glob("frame_*.png"))
+            landed.append(Image.open(frames[-1]).convert("RGB"))
+            if body == "Earth":
+                out = MEDIA / "reentry.png"
+                Image.open(frames[1000]).save(out)
+                print(f"wrote {out}")
+    grid = Image.new("RGB", (landed[0].width * 2, landed[0].height * 2))
+    for k, im in enumerate(landed):
+        grid.paste(im, ((k % 2) * im.width, (k // 2) * im.height))
+    out = MEDIA / "air.png"
+    grid.save(out)
+    print(f"wrote {out}")
     return 0
 
 

@@ -142,6 +142,21 @@ NAIF. The orrery is not endorsed by NASA or JPL.
 | Haumea | 797.6 km (equal-volume sphere) | Ortiz, J. L. et al. (2017), *The size, shape, density and ring of the dwarf planet Haumea from a stellar occultation*, Nature 550, 219. Semi-axes 1,161 × 852 × 513 km. |
 | Makemake | 732.8 km (geometric mean) | Ortiz, J. L. et al. (2012), *Albedo and atmospheric constraints of dwarf planet Makemake from a stellar occultation*, Nature 491, 566. Projected 1,430 × 1,502 km. |
 
+### Air
+
+The ship flies through the air of Venus, Earth, Mars and Titan (`src/orrery/atmosphere.cpp`). Each air is drawn as one exponential layer, density = surface density × exp(−altitude / scale height). It is cut off where it thins to 10⁻⁶ kg/m³: about 286 km up on Venus, 119 km on Earth, 107 km on Mars and 325 km on Titan.
+
+| Body | Surface density | Scale height | Source |
+|---|---|---|---|
+| Venus | 65 kg/m³ | 15.9 km | NASA NSSDCA *Venus Fact Sheet* |
+| Earth | 1.217 kg/m³ | 8.5 km | NASA NSSDCA *Earth Fact Sheet* |
+| Mars | 0.016 kg/m³ | 11.0 km | NASA NSSDCA *Mars Fact Sheet* (~0.016 ± 0.006 kg/m³) |
+| Titan | 5.24 kg/m³ | 21 km | **Derived, not quoted.** From a surface pressure of 1.5 bar (Lindal et al. 1983, *Icarus* 53, 348), a surface temperature of 94 K (Flasar et al. 2005, *Science* 308, 975), and 94.2% N₂ and 5.65% CH₄ (mean molar mass 27.3 g/mol), by the ideal gas law. The scale height is RT/(Mg) at the surface (g = 1.352 m/s²), inside the 15–50 km range usually quoted for Titan's air. |
+
+- **Sources:** NASA NSSDCA planetary fact sheets (<https://nssdc.gsfc.nasa.gov/planetary/factsheet/>). These are NASA works and are not subject to copyright in the United States.
+- **Game choices, not data:** the single layer, the cut-off, the burn speed (5 km/s at a density of 1.217 kg/m³, scaling as density^(−1/6), the shape of the Sutton–Graves heating law), the ship's ballistic coefficient (10,000 kg/m²), the heat's 3 s time constant, and the sky colours.
+- **Left out:** Pluto's and Triton's air (a few pascals), and the giant planets' air. The ship is lost at a giant's drawn radius before its air would matter.
+
 ### Ring radii
 
 The rings are drawn as flat annuli in the planet's equatorial plane, which comes from the IAU pole.
