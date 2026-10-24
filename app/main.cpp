@@ -1016,11 +1016,12 @@ int main(int argc, char** argv) {
                 std::filesystem::create_directories(args.framesDir);
                 const int count = std::max(args.count, 1);
                 double hottest = 0;
+                FrameReport last;
                 for (int i = 0; i < count; ++i) {
                     world->shipDt = i == 0 ? 0.0 : 1.0 / 30;
                     char rate[64];
                     std::snprintf(rate, sizeof rate, "%g d per frame", args.step);
-                    frame(rate);
+                    last = frame(rate);
                     hottest = std::max(hottest, world->ship.heat());
                     char name[64];
                     std::snprintf(name, sizeof name, "/frame_%04d.png", i);
@@ -1031,9 +1032,10 @@ int main(int argc, char** argv) {
                 std::printf("wrote %d frames to %s\n", count, args.framesDir.c_str());
                 if (cam.ship) {
                     const Touchdown& td = world->ship.touchdown();
-                    std::printf("ship: touchdown %s%s%s, hottest %.0f%%\n", touchdownName(td.grade),
-                                td.body >= 0 ? " on " : "", td.body >= 0 ? sys.bodies()[static_cast<size_t>(td.body)].name.c_str() : "",
-                                hottest * 100);
+                    std::printf("ship: touchdown %s%s%s, hottest %.0f%%, %d labels in the last frame\n",
+                                touchdownName(td.grade), td.body >= 0 ? " on " : "",
+                                td.body >= 0 ? sys.bodies()[static_cast<size_t>(td.body)].name.c_str() : "", hottest * 100,
+                                last.labels);
                 }
             } else {
                 frame("paused");
