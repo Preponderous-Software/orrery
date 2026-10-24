@@ -76,8 +76,10 @@ for _m in MOONS:
     _m["kind"] = "moon"
 
 # Dwarf planets other than Pluto: heliocentric Horizons element tables.
-# Physical data: Ceres from pck00011.tpc; the rest from SBDB's physical
-# parameters (pck00011.tpc has no entry for them).
+# Physical data: Ceres from pck00011.tpc. pck00011.tpc has no entry for the
+# rest: their radii come from stellar-occultation papers (LITERATURE_RADII in
+# tools/build_catalog.py) and their rotation periods from SBDB's physical
+# parameters ("sbdb_phys").
 HELIO_TABLE_BODIES = [
     {"name": "Ceres", "naif": 2000001, "horizons": "1;", "kind": "dwarf", "color": [0.55, 0.53, 0.50]},
     {"name": "Eris", "naif": 2136199, "horizons": "136199;", "kind": "dwarf", "color": [0.90, 0.90, 0.88],
