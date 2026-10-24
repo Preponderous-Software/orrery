@@ -10,7 +10,8 @@
 // View options: --yaw DEG --pitch DEG --distance-au AU (drawn), --no-labels, --no-orbits,
 // --no-small-bodies, --no-hud, --axes. Ship: --ship [--drive 1-5] [--throttle F] [--cockpit]
 // [--target NAME [--autopilot | --land]] starts in the ship where the orbit camera would be (with
-// --frames it flies 1/30 s per frame). --mission ID starts that mission instead (the ship options
+// --frames it flies 1/30 s per frame); --altitude KM starts it instead that many real km above the
+// target's surface under the Sun, flying level. --mission ID starts that mission instead (the ship options
 // still apply; --land and --autopilot fly to its first goal); --missions opens the mission list.
 #include <algorithm>
 #include <chrono>
@@ -86,6 +87,7 @@ struct Args {
     std::string target;     // ship: the target, if not --focus
     int drive = 1;          // 1 = thrusters .. 5 = warp 3
     double throttle = 0;
+    double altitudeKm = -1;  // ship: start this far above the target's surface (real km); < 0 = no
     std::string mission;    // start this mission (an id from missions())
     bool missionsPanel = false;
 };
@@ -96,7 +98,8 @@ int usage() {
         "              [--enlarge K] [--rate DAYS_PER_SECOND] [--width W] [--height H]\n"
         "              [--yaw DEG] [--pitch DEG] [--distance-au AU] [--no-labels] [--no-orbits]\n"
         "              [--no-small-bodies] [--no-hud] [--axes]\n"
-        "              [--ship [--drive 1-5] [--throttle F] [--cockpit] [--target NAME [--autopilot | --land]]]\n"
+        "              [--ship [--drive 1-5] [--throttle F] [--cockpit] [--target NAME [--autopilot | --land]\n"
+        "                      [--altitude KM]]]\n"
         "              [--mission ID] [--missions]\n"
         "       orrery --headless ... --screenshot out.png\n"
         "       orrery --headless ... --frames DIR --count N [--step DAYS] [--yaw-step DEG]\n"
@@ -147,6 +150,7 @@ bool parse(int argc, char** argv, Args& a) {
         else if (k == "--target") a.target = val();
         else if (k == "--autopilot") a.autopilot = true;
         else if (k == "--land") a.land = true;
+        else if (k == "--altitude") a.altitudeKm = std::atof(val().c_str());
         else if (k == "--drive") a.drive = std::atoi(val().c_str());
         else if (k == "--throttle") a.throttle = std::atof(val().c_str());
         else if (k == "--mission") a.mission = val();
@@ -284,6 +288,19 @@ struct World {
     std::string missionNote;            // why the last mission was abandoned
 
     void board() { boardAt(renderer->eyeOf(cam), renderer->forwardOf(cam)); }
+
+    // Boards the ship `altitudeKm` real km above a body's surface at the point
+    // under the Sun, nose level and along the body's orbit-ish horizon.
+    void boardAbove(int body, double altitudeKm) {
+        const double r = renderer->drawnRadius(body), real = sys->bodies()[static_cast<size_t>(body)].radiusKm;
+        if (body <= 0 || r <= 0 || real <= 0) return;
+        const Vec3 centre = renderer->drawn()[static_cast<size_t>(body)];
+        const Vec3 up = normalize(renderer->drawn()[0] - centre);
+        const Vec3 level = normalize(cross(Vec3{0, 0, 1}, up));
+        boardAt(centre + up * (r + altitudeKm * r / real), level);
+        ship.up = up;  // wings level: the body's surface below, the Sun overhead
+        chaseUp = up;
+    }
 
     void boardAt(const Vec3& position, const Vec3& forward) {
         ship.place(position, forward);
@@ -451,6 +468,7 @@ struct World {
             ship.setThrottle(args.throttle);
             ship.speed = args.throttle * ship.topSpeed();  // already up to speed; mass lock still applies
             if (!args.target.empty() && !started) cam.focus = sys->find(args.target);
+            if (args.altitudeKm >= 0 && !started) boardAbove(cam.focus, args.altitudeKm);
             ship.setTarget(cam.focus);
             ship.engageAutopilot(args.autopilot);
             if (args.land) ship.engageLanding(true);

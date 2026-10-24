@@ -176,6 +176,14 @@ up through speed tiers.
 descent to Earth: `--date 2026-11-24 --enlarge 1 --ship --target Earth --land`.*
 
 <p align="center">
+  <img src="docs/media/glide.png" width="640" alt="The ship gliding level 1 km over Earth under a blue sky, the sea's horizon ahead, the HUD reading GLIDING in Earth's air at 0.08 km/s and descending 17 m/s">
+</p>
+
+*Gliding at zero throttle 1 km over Earth, ten seconds in: `--date 2026-11-24
+--enlarge 1 --ship --target Earth --altitude 1`. `--altitude KM` starts the ship
+that many kilometres above the target's surface, under the Sun, flying level.*
+
+<p align="center">
   <img src="docs/media/landing.gif" width="640" alt="The landing autopilot taking the ship from 20,000 km out down to the Moon's surface: the Moon grows to fill the view, the drive steps down from warp 1 through cruise to thrusters, and the ship lands at about 33 m/s and sits level with the horizon ahead">
 </p>
 
@@ -294,6 +302,7 @@ The other tests:
 - `test_csv` covers the catalogue's CSV reader: comment and blank lines, CRLF line ends, empty cells, the fallback for an empty number, and errors that name the file for a ragged row, a missing header, an unknown column or a cell that is not a number.
 - `test_flight` covers the ship: the drive tiers (warp 1 is the speed of light) and spooling up to warp 3, the controls (tier and throttle limits, reverse, all stop, and autopilot needing a present target and giving way to the stick), mass lock bringing a ship flown at Earth at warp down to a soft landing, the three touchdown grades on thrusters (a landed ship sits level; a crash is put back above the surface), the Sun and the giant planets having no surface to land on (lost at any speed; the landing autopilot stops at the standoff), lifting off only with the nose up, a landed ship turning with its body, the landing autopilot setting down on the Moon and climbing out from it, moving with a body inside its influence, steering that keeps the ship's axes orthonormal, autopilot arriving at its standoff from Mars, and the ship's size following its altitude.
 - `test_missions` covers the missions: the list (ten, unique ids, every kind, pars on the races only), every mission's bodies existing and present at its date in the real catalogue with its landings on solid ground, the start pose, a landing tour completing in any order with a crash not counting and the clock stopping at the end, latitude and far-side landings counting only where they ask (and saying why not), a flyby at warp 3 counting across a single step, a race flown by hand beating the landing autopilot, and the best-time records (round trip, damaged lines skipped, only a faster time replacing one).
+- `glide_to_earth` glides at zero throttle from 500 m over Earth headless in the app and checks for a soft touchdown.
 - `mission_moon_run` and `mission_hot_entry` fly the Moon run and the hot entry headless in the app on the landing autopilot and check that they complete.
 - `test_atmosphere` covers air: the four thick atmospheres and Pluto's and Triton's thin ones (none on the Sun, Mercury, the Moon or the giants), density at the surface, one scale height up and the top, and the burn speed. In flight it covers thrusters staying cool at 60 km in Earth's air, cruise at 40 km/s there burning up (put back above the air, cold and at rest), heat building over seconds just over the burn speed, Venus's air holding the ship back, the landing autopilot coming down through each of the four airs without passing 50% heat, climbing out on autopilot staying cool, the same burn-up at 500 times the drawn size, gliding at zero throttle (still flying, sinking, landing softly on Earth; no glide under power or without a known gravity), and the hot entry ridden by hand beating the landing autopilot by more than 3 s while 95% of the burn speed burns up.
 - `land_through_air` flies the landing autopilot to Earth headless in the app and checks for a soft touchdown with the heat under 50%, and for no labels in the daytime sky once landed (Mercury and Venus are in view).

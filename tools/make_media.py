@@ -6,7 +6,7 @@
 
 Writes docs/media/*.png (mission_complete.png is the last frame of a mission flown on the landing
 autopilot; air.png puts together the last frames of four landings through air, and reentry.png is
-one frame of the descent to Earth), docs/media/hero.gif, earth_day.gif, ship.gif and landing.gif. Every image is a plain
+one frame of the descent to Earth; glide.png is ten seconds into a glide 1 km over Earth), docs/media/hero.gif, earth_day.gif, ship.gif and landing.gif. Every image is a plain
 `orrery --headless` run; the command for each is printed.
 """
 from __future__ import annotations
@@ -157,6 +157,15 @@ def main() -> int:
     out = MEDIA / "air.png"
     grid.save(out)
     print(f"wrote {out}")
+
+    # A glide: the ship started 1 km over Earth at the point under the Sun,
+    # throttle at zero; frame 300 is ten seconds in.
+    with tempfile.TemporaryDirectory() as tmp:
+        run(binary, ["--date", "2026-11-24", "--enlarge", "1", "--ship", "--target", "Earth", "--altitude", "1",
+                     "--no-small-bodies", "--frames", tmp, "--count", "301", "--step", "0"], size=(640, 360))
+        out = MEDIA / "glide.png"
+        Image.open(sorted(Path(tmp).glob("frame_*.png"))[300]).save(out)
+        print(f"wrote {out}")
     return 0
 
 
