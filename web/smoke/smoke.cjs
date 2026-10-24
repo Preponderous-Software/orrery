@@ -233,6 +233,8 @@ async function shot(page, name) {
     await page.locator('#stop').click();
     await page.waitForFunction(() => window.orrery.status().landing === false, null, { timeout: 10000 });
     check(true, 'Stop ends it');
+    const aloft = await status();
+    check(aloft.heat === 0 && aloft.air === -1, `out of any air the ship is cold (heat ${aloft.heat}, air ${aloft.air})`);
 
     await page.evaluate(() => window.orrery.hold(1));
     await page.waitForTimeout(200);

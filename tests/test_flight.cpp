@@ -18,8 +18,8 @@ constexpr double kEarthR = 6371;
 // The Sun at the origin and an Earth 1 au out along +X.
 std::vector<FlightBody> world(Vec3 earthAt = {kAuKm, 0, 0}) {
     std::vector<FlightBody> b(2);
-    b[0] = {{0, 0, 0}, 695700, 1e308, true, {}, false};
-    b[1] = {earthAt, kEarthR, 25 * kEarthR, true, {}, true};
+    b[0] = {{0, 0, 0}, 695700, 1e308, true, {}, false, {}, 1};
+    b[1] = {earthAt, kEarthR, 25 * kEarthR, true, {}, true, {}, 1};
     return b;
 }
 
@@ -135,7 +135,7 @@ int main() {
         std::vector<FlightBody> bodies = world();
         const double jupR = 69911;
         const Vec3 jupiter{5.2 * kAuKm, 0, 0};
-        bodies.push_back({jupiter, jupR, 25 * jupR, true, {}, false});
+        bodies.push_back({jupiter, jupR, 25 * jupR, true, {}, false, {}, 1});
         ship.place(jupiter + Vec3{0, 0, 30 * jupR}, {0, 0, 1});
         ship.setTarget(2);
         CHECK(ship.engageLanding(true));
@@ -191,7 +191,7 @@ int main() {
     {
         std::vector<FlightBody> bodies = world();
         const Vec3 earth{kAuKm, 0, 0}, moonAt = earth + Vec3{384400, 0, 0};
-        bodies.push_back({moonAt, 1737.4, 12 * 1737.4, true, {}, true});
+        bodies.push_back({moonAt, 1737.4, 12 * 1737.4, true, {}, true, {}, 1});
         Ship ship;
         CHECK(!ship.engageLanding(true));  // no target
         ship.place(earth + Vec3{0, 0, 30 * kEarthR}, {0, 0, 1});
@@ -314,7 +314,7 @@ int main() {
     {
         std::vector<FlightBody> bodies = world();
         const Vec3 mars{-1.5 * kAuKm, 0.2 * kAuKm, 0};
-        bodies.push_back({mars, 3390, 25 * 3390, true, {}, true});
+        bodies.push_back({mars, 3390, 25 * 3390, true, {}, true, {}, 1});
         Ship ship;
         ship.place(Vec3{kAuKm, 0, 0} + Vec3{0, 0, 30 * kEarthR}, {0, 0, 1});  // facing away
         ship.setTarget(2);

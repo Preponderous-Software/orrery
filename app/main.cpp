@@ -162,6 +162,7 @@ const char* touchdownName(Touchdown::Grade g) {
         case Touchdown::Hard: return "hard";
         case Touchdown::Crash: return "crash";
         case Touchdown::Lost: return "lost";
+        case Touchdown::Burned: return "burned";
         default: return "none";
     }
 }
@@ -758,7 +759,7 @@ struct Interactive {
                       "\"labels\":%s,\"orbits\":%s,\"help\":%s,\"firstDate\":\"%s\",\"lastDate\":\"%s\","
                       "\"ship\":%s,\"drive\":\"%s\",\"throttle\":%.3f,\"speed\":%.6g,\"autopilot\":%s,"
                       "\"cockpit\":%s,\"shipTriangles\":%d,\"stickX\":%.3f,\"stickY\":%.3f,"
-                      "\"landing\":%s,\"landed\":%d,\"touchdown\":\"%s\",\"impact\":%.6g,"
+                      "\"landing\":%s,\"landed\":%d,\"touchdown\":\"%s\",\"impact\":%.6g,\"heat\":%.3f,\"air\":%d,"
                       "\"missionList\":%s,\"mission\":\"%s\",\"missionDone\":%d,\"missionGoals\":%d,"
                       "\"missionSeconds\":%.3f,\"missionComplete\":%s,\"newBest\":%s,\"recordsVersion\":%d}",
                       frames, w->cam.focus, b.name.c_str(), w->cam.freeFly ? "true" : "false",
@@ -773,7 +774,7 @@ struct Interactive {
                       kDriveTiers[ship.tier()].name, ship.throttle(), ship.speed, ship.autopilot() ? "true" : "false",
                       w->view.cockpit ? "true" : "false", report.shipTriangles, stickX, stickY,
                       ship.landing() ? "true" : "false", ship.landed(), touchdownName(ship.touchdown().grade),
-                      ship.touchdown().impactKmPerS, w->panel ? "true" : "false",
+                      ship.touchdown().impactKmPerS, ship.heat(), ship.air(), w->panel ? "true" : "false",
                       run.mission() ? run.mission()->id.c_str() : "", run.mission() ? run.goalsDone() : 0,
                       run.mission() ? run.goalCount() : 0, run.seconds(), run.complete() ? "true" : "false",
                       w->newBest ? "true" : "false", w->recordsVersion);
@@ -1016,11 +1017,13 @@ int main(int argc, char** argv) {
             if (!args.framesDir.empty()) {
                 std::filesystem::create_directories(args.framesDir);
                 const int count = std::max(args.count, 1);
+                double hottest = 0;
                 for (int i = 0; i < count; ++i) {
                     world->shipDt = i == 0 ? 0.0 : 1.0 / 30;
                     char rate[64];
                     std::snprintf(rate, sizeof rate, "%g d per frame", args.step);
                     frame(rate);
+                    hottest = std::max(hottest, world->ship.heat());
                     char name[64];
                     std::snprintf(name, sizeof name, "/frame_%04d.png", i);
                     engine->saveScreenshotPng(args.framesDir + name);
@@ -1028,6 +1031,12 @@ int main(int argc, char** argv) {
                     cam.yawDeg += args.yawStep;
                 }
                 std::printf("wrote %d frames to %s\n", count, args.framesDir.c_str());
+                if (cam.ship) {
+                    const Touchdown& td = world->ship.touchdown();
+                    std::printf("ship: touchdown %s%s%s, hottest %.0f%%\n", touchdownName(td.grade),
+                                td.body >= 0 ? " on " : "", td.body >= 0 ? sys.bodies()[static_cast<size_t>(td.body)].name.c_str() : "",
+                                hottest * 100);
+                }
             } else {
                 frame("paused");
                 const std::string out = args.screenshot.empty() ? "orrery.png" : args.screenshot;

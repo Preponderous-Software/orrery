@@ -27,11 +27,11 @@ const Vec3 kEarth{kAuKm, 0, 0}, kMoon = kEarth + Vec3{384400, 0, 0}, kMars{-1.5 
 // The Sun, Earth, the Moon, Mars and a probe with no radius, indexed 0..4.
 std::vector<FlightBody> world() {
     std::vector<FlightBody> b(5);
-    b[0] = {{0, 0, 0}, 695700, 1e308, true, {}, false};
-    b[1] = {kEarth, kEarthR, 25 * kEarthR, true, {}, true};
-    b[2] = {kMoon, kMoonR, 12 * kMoonR, true, {}, true};
-    b[3] = {kMars, kMarsR, 25 * kMarsR, true, {}, true};
-    b[4] = {{0, 3 * kAuKm, 0}, 0, 0, true, {}, true};
+    b[0] = {{0, 0, 0}, 695700, 1e308, true, {}, false, {}, 1};
+    b[1] = {kEarth, kEarthR, 25 * kEarthR, true, {}, true, {}, 1};
+    b[2] = {kMoon, kMoonR, 12 * kMoonR, true, {}, true, {}, 1};
+    b[3] = {kMars, kMarsR, 25 * kMarsR, true, {}, true, {}, 1};
+    b[4] = {{0, 3 * kAuKm, 0}, 0, 0, true, {}, true, {}, 1};
     return b;
 }
 

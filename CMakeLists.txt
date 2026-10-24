@@ -59,6 +59,7 @@ add_library(orrery_core STATIC
   src/orrery/element_table.cpp
   src/orrery/system.cpp
   src/orrery/scale.cpp
+  src/orrery/atmosphere.cpp
   src/orrery/flight.cpp
   src/orrery/missions.cpp)
 target_include_directories(orrery_core PUBLIC src)
@@ -66,7 +67,7 @@ orrery_warnings(orrery_core)
 
 if(ORRERY_BUILD_TESTS)
   enable_testing()
-  foreach(t time kepler scale rotation csv flight element_table)
+  foreach(t time kepler scale rotation csv flight atmosphere element_table)
     add_executable(test_${t} tests/test_${t}.cpp)
     target_link_libraries(test_${t} PRIVATE orrery_core)
     orrery_warnings(test_${t})
@@ -134,5 +135,10 @@ if(ORRERY_WITH_STRATA)
              --mission moon-run --land --no-small-bodies --width 160 --height 90
              --frames "${CMAKE_CURRENT_BINARY_DIR}/mission_moon_run" --count 800 --step 0)
     set_tests_properties(mission_moon_run PROPERTIES PASS_REGULAR_EXPRESSION "mission moon-run complete")
+    # The landing autopilot comes down through Mars's air softly and stays cool (heat under 50%).
+    add_test(NAME land_through_air COMMAND orrery --data "${CMAKE_CURRENT_SOURCE_DIR}/data" --headless
+             --mode true --enlarge 1 --date 2026-11-24 --ship --target Mars --land --no-small-bodies
+             --width 160 --height 90 --frames "${CMAKE_CURRENT_BINARY_DIR}/land_through_air" --count 1500 --step 0)
+    set_tests_properties(land_through_air PROPERTIES PASS_REGULAR_EXPRESSION "touchdown soft on Mars, hottest [1-4]?[0-9]%")
   endif()
 endif()

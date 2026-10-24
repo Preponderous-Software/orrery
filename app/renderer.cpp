@@ -273,6 +273,8 @@ std::vector<FlightBody> Renderer::flightBodies(const SystemState& state) const {
         fb.present = state.valid[i];
         sys_.frame(static_cast<int>(i), state.jdTdb, fb.frame);  // a landed ship turns with its body
         fb.solid = hasSolidSurface(bodies[i].kind, bodies[i].naif);
+        fb.air = atmosphereOf(bodies[i].naif);
+        if (fb.radius > 0 && bodies[i].radiusKm > 0) fb.realPerDrawn = bodies[i].radiusKm / fb.radius;
         // The Sun holds everything; a planet its moon system; a moon a few radii.
         if (i == 0) {
             fb.influence = std::numeric_limits<double>::infinity();
@@ -465,6 +467,37 @@ void Renderer::addShip(const Ship& ship, const Vec3& origin) {
         glow.flags = STRATA_POINT_SOFT;
         points_.push_back(glow);
     }
+    // Heat: a glow of hot air over the leading end, orange turning yellow-white.
+    const double heat = std::clamp(ship.heat(), 0.0, 1.0);
+    if (heat > 0.02) {
+        const Vec3 lead = ship.forward * (ship.speed < 0 ? -1.0 : 1.0);
+        for (int k = 0; k < 3; ++k) {
+            StrataPoint hot{};
+            setVec(hot.position, ship.position + lead * ((0.45 - 0.35 * k) * L) - origin);
+            hot.world_diameter = f(L * (0.5 + 0.9 * heat) * (1.0 - 0.25 * k));
+            hot.color[0] = 1.0f;
+            hot.color[1] = f(0.45 + 0.5 * heat);
+            hot.color[2] = f(0.15 + 0.6 * heat * heat);
+            hot.color[3] = f((0.25 + 0.65 * heat) * (1.0 - 0.3 * k));
+            hot.flags = STRATA_POINT_SOFT;
+            points_.push_back(hot);
+        }
+    }
+}
+
+// The sky from inside a body's air: its colour, as bright as the air above
+// is thick (the column above goes as the density here), on the day side only.
+// Never at full strength, so the HUD stays readable against it.
+std::array<float, 3> Renderer::skyColor(const Ship& ship) const {
+    if (ship.air() < 0) return {0, 0, 0};
+    const auto i = static_cast<size_t>(ship.air());
+    const Atmosphere air = atmosphereOf(sys_.bodies()[i].naif);
+    const Vec3 normal = normalize(ship.position - drawn_[i]);
+    const double sunUp = dot(normal, normalize(drawn_[0] - drawn_[i]));
+    const double day = std::clamp((sunUp + 0.1) / 0.3, 0.0, 1.0);
+    const double thick = std::sqrt(std::min(ship.airDensity() / air.surfaceDensity, 1.0));
+    const float k = f(0.7 * day * thick);
+    return {air.sky[0] * k, air.sky[1] * k, air.sky[2] * k};
 }
 
 void Renderer::addDust(const Ship& ship, const Vec3& origin) {
@@ -837,9 +870,9 @@ FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, con
     // ---- submit
     StrataFrameDesc frame{};
     frame.clear_flags = STRATA_CLEAR_COLOR | STRATA_CLEAR_DEPTH;
-    frame.clear_color[0] = 0.004f;
-    frame.clear_color[1] = 0.005f;
-    frame.clear_color[2] = 0.012f;
+    const float night[3] = {0.004f, 0.005f, 0.012f};
+    const std::array<float, 3> sky = view.ship ? skyColor(*view.ship) : std::array<float, 3>{0, 0, 0};
+    for (int c = 0; c < 3; ++c) frame.clear_color[c] = std::max(night[c], sky[static_cast<size_t>(c)]);
     frame.clear_color[3] = 1;
     engine_.beginFrame(frame);
     engine_.submitPrimitives(items_.data(), items_.size());
@@ -899,6 +932,10 @@ void Renderer::flightHud(const SystemState& state, const CameraState& cam, const
     char buf[256];
     std::snprintf(buf, sizeof buf, "%s%.0f%%", ship.throttle() < 0 ? "reverse " : "", std::fabs(ship.throttle()) * 100);
     put(buf, kWhite, big);
+    if (ship.air() >= 0 || ship.heat() >= 0.01) {
+        std::snprintf(buf, sizeof buf, "   HEAT %.0f%%", std::min(ship.heat(), 1.0) * 100);
+        put(buf, ship.heat() >= 0.75 ? kAlarm : ship.heat() >= 0.4 ? kWarn : kWhite, big);
+    }
     y += big + 6;
 
     // What is happening: autopilot, mass lock, touchdown, arrived.
@@ -906,7 +943,10 @@ void Renderer::flightHud(const SystemState& state, const CameraState& cam, const
     x = 10;
     if (ship.autopilot()) put((ship.landing() ? "LANDING on " : "AUTOPILOT to ") + name(ship.target()), kGo, big);
     const Touchdown& td = ship.touchdown();
-    if (ship.massLock() >= 0) {
+    if (ship.heat() >= 0.75) {
+        if (ship.autopilot()) put("   ", kDim, big);
+        put("HOT: slow down or burn up", kAlarm, big);
+    } else if (ship.massLock() >= 0) {
         if (ship.autopilot()) put("   ", kDim, big);
         put("MASS LOCK: " + name(ship.massLock()) + " holds the drive", kWarn, big);
     } else if (td.grade == Touchdown::Soft) {
@@ -915,6 +955,9 @@ void Renderer::flightHud(const SystemState& state, const CameraState& cam, const
         put("HARD LANDING on " + name(td.body) + "  " + verticalText(td.impactKmPerS), kWarn, big);
     } else if (td.grade == Touchdown::Crash) {
         put("CRASHED into " + name(td.body) + " at " + verticalText(td.impactKmPerS), kAlarm, big);
+    } else if (td.grade == Touchdown::Burned) {
+        std::snprintf(buf, sizeof buf, "BURNED UP in %s's air at %.1f km/s", name(td.body).c_str(), td.impactKmPerS);
+        put(buf, kAlarm, big);
     } else if (td.grade == Touchdown::Lost) {
         put(bodies[static_cast<size_t>(td.body)].kind == BodyKind::Star ? "BURNED UP in " + name(td.body)
                                                                          : "LOST in " + name(td.body) + "'s clouds",
@@ -927,7 +970,7 @@ void Renderer::flightHud(const SystemState& state, const CameraState& cam, const
     // TARGET Mars  0.512 au  ETA 4 min 13 s
     x = 10;
     if (cam.focus >= 0 && state.valid[static_cast<size_t>(cam.focus)]) {
-        const FlightBody target{drawn_[static_cast<size_t>(cam.focus)], drawnRadius_[static_cast<size_t>(cam.focus)], 0, true, {}, true};
+        const FlightBody target{drawn_[static_cast<size_t>(cam.focus)], drawnRadius_[static_cast<size_t>(cam.focus)], 0, true, {}, true, {}, 1};
         const Vec3 rel = target.centre - ship.position;
         const double dist = length(rel);
         put("TARGET ", kDim, big);
@@ -948,8 +991,14 @@ void Renderer::flightHud(const SystemState& state, const CameraState& cam, const
         near += "   the ship was put back above the surface";
     } else if (td.grade == Touchdown::Lost) {
         near += "   no solid surface: put back outside it";
+    } else if (td.grade == Touchdown::Burned) {
+        near += "   too fast in the air: put back above it";
     } else if (ship.nearest() >= 0 && ship.climb() != 0) {
         near += (ship.climb() < 0 ? "   descending " : "   climbing ") + verticalText(ship.climb());
+    }
+    if (ship.air() >= 0) {
+        std::snprintf(buf, sizeof buf, "   air %.2g kg/m3", ship.airDensity());
+        near += buf;
     }
     if (ship.anchor() > 0) near += "   moving with " + name(ship.anchor());
     if (view.scale.mode == ScaleMode::Compressed) near += "   (speeds and distances are of the COMPRESSED drawing)";

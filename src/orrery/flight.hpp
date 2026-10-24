@@ -10,6 +10,7 @@
 
 #include <vector>
 
+#include "orrery/atmosphere.hpp"
 #include "orrery/rotation.hpp"
 #include "orrery/vec.hpp"
 
@@ -39,6 +40,8 @@ struct FlightBody {
     bool present = false;   // has a position at this date
     BodyFrame frame;        // the body's axes at this date; a landed ship turns with them
     bool solid = true;      // has a surface to land on; the Sun and the giant planets do not
+    Atmosphere air;         // its air, if any (in real km and kg/m^3)
+    double realPerDrawn = 1;  // real km per drawn km: the air is as thick and as fast-burning at every scale
 };
 
 // This step's stick and throttle input.
@@ -60,8 +63,17 @@ constexpr double kLockedFloorKmPerS = 0.05;
 constexpr double kSoftLandingKmPerS = 0.12;
 constexpr double kHardLandingKmPerS = 0.6;
 
+// Air: drag slows the ship (dv/dt = -density * v^2 / (2 * ballistic
+// coefficient)), and speed in it heats the ship toward burnSpeed(). Heat eases
+// toward (speed / burn speed)^3 over kHeatSeconds, and cools the same way out
+// of the air; at 1 the ship burns up. Game values, in real units.
+constexpr double kBallisticKgPerM2 = 10000;
+constexpr double kHeatSeconds = 3;
+
 struct Touchdown {
-    enum Grade { None, Soft, Hard, Crash, Lost };  // Lost: into a body with no solid surface
+    // Lost: into a body with no solid surface. Burned: too fast in a body's air
+    // (impactKmPerS is then the speed, in real km/s).
+    enum Grade { None, Soft, Hard, Crash, Lost, Burned };
     Grade grade = None;
     int body = -1;
     double impactKmPerS = 0;  // speed into the surface at contact
@@ -86,6 +98,7 @@ public:
     bool engageAutopilot(bool on);
     // Landing autopilot: flies to the target and sets down on it softly. A
     // target with no solid surface gets the plain autopilot's standoff instead.
+    // In air, either autopilot keeps to a speed that stays cool (kAutopilotHeat).
     bool engageLanding(bool on);
 
     Vec3 position;
@@ -111,6 +124,9 @@ public:
     // or a loss until it moves again after being put back above the surface).
     const Touchdown& touchdown() const { return touchdown_; }
     int arrived() const { return arrived_; }      // the target autopilot last reached, or -1
+    int air() const { return air_; }              // the body whose air the ship is in, or -1
+    double airDensity() const { return airDensity_; }  // kg/m^3 there
+    double heat() const { return heat_; }         // 0 cold .. 1 burning up
     // Where autopilot stops: a few radii out from the target.
     static double standoff(const FlightBody& b);
 
@@ -119,6 +135,8 @@ private:
     void turn(double pitch, double yaw, double roll);
     void fly(double dt, const std::vector<FlightBody>& bodies);
     void contact(int body, const FlightBody& b, const Vec3& out);
+    void burnUp(int body, const FlightBody& b, double speedKmPerS);
+    double airCap(const std::vector<FlightBody>& bodies) const;
 
     double throttle_ = 0;  // -0.25..1 of the tier's top speed
     int tier_ = 0;
@@ -133,6 +151,8 @@ private:
     int climbFrom_ = -1;  // autopilot: the surface it is climbing away from
     double climb_ = 0;
     int massLock_ = -1, landed_ = -1, arrived_ = -1;
+    int air_ = -1;
+    double airDensity_ = 0, heat_ = 0;
     Touchdown touchdown_;
     // While landed: the ship in its body's axes, so it turns with the body.
     Vec3 localPos_, localForward_, localUp_;
