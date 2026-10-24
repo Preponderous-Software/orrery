@@ -32,6 +32,14 @@ constexpr DriveTier kDriveTiers[] = {
 };
 constexpr int kDriveTierCount = sizeof kDriveTiers / sizeof kDriveTiers[0];
 
+// Fuel, as a fraction of a full tank. Each tier burns this much per second at
+// full throttle (in proportion to the throttle, reverse included): a full tank
+// lasts about 17 minutes on thrusters at full, 2 minutes at warp 3. Gliding and
+// sitting on a surface burn nothing, and a landed ship refuels at
+// kRefuelPerSecond. Game values.
+constexpr double kFuelPerSecond[] = {0.001, 0.002, 0.004, 0.006, 0.008};
+constexpr double kRefuelPerSecond = 0.2;
+
 // One body as the ship sees it this instant, indexed like the catalogue.
 struct FlightBody {
     Vec3 centre;            // drawn
@@ -132,6 +140,12 @@ public:
     // or a loss until it moves again after being put back above the surface).
     const Touchdown& touchdown() const { return touchdown_; }
     int arrived() const { return arrived_; }      // the target autopilot last reached, or -1
+    double fuel() const { return fuel_; }         // 0 empty .. 1 full
+    void setFuel(double fuel);
+    // The tow for an empty tank: puts the ship at the standoff from the body it
+    // last landed on (else the nearest), at rest, facing it, with a full tank.
+    // Returns that body, or -1 when there is none.
+    int tow(const std::vector<FlightBody>& bodies);
     int air() const { return air_; }              // the body whose air the ship is in, or -1
     double airDensity() const { return airDensity_; }  // kg/m^3 there
     double heat() const { return heat_; }         // 0 cold .. 1 burning up
@@ -163,6 +177,8 @@ private:
     int air_ = -1;
     double airDensity_ = 0, heat_ = 0;
     bool gliding_ = false;
+    double fuel_ = 1;
+    int lastLanded_ = -1;
     Touchdown touchdown_;
     // While landed: the ship in its body's axes, so it turns with the body.
     Vec3 localPos_, localForward_, localUp_;

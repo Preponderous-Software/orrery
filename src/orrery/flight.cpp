@@ -61,6 +61,25 @@ void Ship::place(const Vec3& p, const Vec3& fwd) {
     airDensity_ = 0;
     heat_ = 0;
     gliding_ = false;
+    fuel_ = 1;
+    lastLanded_ = -1;
+}
+
+void Ship::setFuel(double fuel) { fuel_ = std::clamp(fuel, 0.0, 1.0); }
+
+int Ship::tow(const std::vector<FlightBody>& bodies) {
+    const int n = static_cast<int>(bodies.size());
+    auto usable = [&](int i) { return i >= 0 && i < n && bodies[static_cast<size_t>(i)].present; };
+    const int body = usable(lastLanded_) ? lastLanded_ : usable(nearest_) ? nearest_ : -1;
+    if (body < 0) return -1;
+    const FlightBody& b = bodies[static_cast<size_t>(body)];
+    Vec3 out = position - b.centre;
+    out = length(out) > 0 ? normalize(out) : Vec3{1, 0, 0};
+    const int keepTarget = target_, keepLanded = lastLanded_;
+    place(b.centre + out * (b.radius + standoff(b)), -out);  // at rest, cold, a full tank
+    target_ = keepTarget;
+    lastLanded_ = keepLanded;
+    return body;
 }
 
 void Ship::setTier(int tier) { tier_ = std::clamp(tier, 0, kDriveTierCount - 1); }
@@ -157,6 +176,10 @@ void Ship::step(double dt, const FlightControls& c, const std::vector<FlightBody
 
 void Ship::fly(double dt, const std::vector<FlightBody>& bodies) {
     const int n = static_cast<int>(bodies.size());
+    if (fuel_ <= 0) {  // an empty tank: no drive and no autopilot (a glide still works in air)
+        throttle_ = 0;
+        autopilot_ = false;
+    }
     if (target_ >= n || (target_ >= 0 && !bodies[static_cast<size_t>(target_)].present)) autopilot_ = false;
 
     // ---- autopilot: turn to the target, choose the drive, slow to a stop at the standoff
@@ -246,6 +269,15 @@ void Ship::fly(double dt, const std::vector<FlightBody>& bodies) {
             speed = s * easeLog(std::fabs(speed), std::fabs(wanted), a);
         } else {
             speed = sign(speed) * easeLog(std::fabs(speed), 0, a);  // through rest before reversing
+        }
+    }
+
+    // ---- fuel: the drive burns it in proportion to the throttle; a landed ship refuels
+    if (dt > 0) {
+        if (landed_ >= 0) {
+            fuel_ = std::min(fuel_ + kRefuelPerSecond * dt, 1.0);
+        } else {
+            fuel_ = std::max(fuel_ - std::fabs(throttle_) * kFuelPerSecond[tier_] * dt, 0.0);
         }
     }
 
@@ -394,6 +426,7 @@ void Ship::contact(int body, const FlightBody& b, const Vec3& out, const Vec3& v
         return;
     }
     landed_ = body;
+    lastLanded_ = body;
     Vec3 level = forward - out * dot(forward, out);
     if (length(level) < 1e-9) level = up - out * dot(up, out);
     forward = normalize(level);

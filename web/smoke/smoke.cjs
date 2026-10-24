@@ -235,6 +235,8 @@ async function shot(page, name) {
     check(true, 'Stop ends it');
     const aloft = await status();
     check(aloft.heat === 0 && aloft.air === -1, `out of any air the ship is cold (heat ${aloft.heat}, air ${aloft.air})`);
+    check(aloft.fuel > 0.9 && aloft.fuel < 1 && await page.locator('#tow').isHidden(),
+      `the drive has burned a little fuel (${aloft.fuel}), and with fuel left Tow is hidden`);
 
     await page.evaluate(() => window.orrery.hold(1));
     await page.waitForTimeout(200);
