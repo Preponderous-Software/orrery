@@ -136,6 +136,11 @@ if(ORRERY_WITH_STRATA)
              --mission moon-run --land --no-small-bodies --width 160 --height 90
              --frames "${CMAKE_CURRENT_BINARY_DIR}/mission_moon_run" --count 800 --step 0)
     set_tests_properties(mission_moon_run PROPERTIES PASS_REGULAR_EXPRESSION "mission moon-run complete")
+    # The hot entry on the landing autopilot: from the Moon down through Earth's air, cool all the way.
+    add_test(NAME mission_hot_entry COMMAND orrery --data "${CMAKE_CURRENT_SOURCE_DIR}/data" --headless
+             --mission hot-entry --land --no-small-bodies --width 160 --height 90
+             --frames "${CMAKE_CURRENT_BINARY_DIR}/mission_hot_entry" --count 1100 --step 0)
+    set_tests_properties(mission_hot_entry PROPERTIES PASS_REGULAR_EXPRESSION "mission hot-entry complete")
     # The landing autopilot comes down through Earth's air softly and stays cool (heat under 50%),
     # and under its daytime sky no labels are drawn (Mercury and Venus are in view).
     add_test(NAME land_through_air COMMAND orrery --data "${CMAKE_CURRENT_SOURCE_DIR}/data" --headless

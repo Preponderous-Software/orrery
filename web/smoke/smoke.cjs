@@ -249,7 +249,7 @@ async function shot(page, name) {
     await page.locator('#missions-button').click();
     check(await page.locator('#missions').isVisible(), 'the Missions button opens the mission list');
     const items = await page.locator('#mission-list button').count();
-    check(items === 10, `it lists the ten missions (${items})`);
+    check(items === 11, `it lists the eleven missions (${items})`);
     const moonRun = page.locator('#mission-list button[data-id="moon-run"]');
     const moonText = await moonRun.innerText();
     check(moonText.includes('best 0:21.5') && moonText.includes('par 0:24.0'), 'Moon run shows its best time and par');

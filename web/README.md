@@ -70,7 +70,7 @@ that its controls show at once on the phone, but only after the Joystick toggle 
 the desktop. It checks that the throttle lever opens the throttle and stays put, that
 the stick steers and springs back, that a drive button steps the drive, that Land (aimed at Titan) starts the landing autopilot and Stop ends it, that out of any air the ship reports no heat, and that Exit
 leaves the ship. Last, it loads a best time as the page would from `localStorage`, and
-checks that **Missions** lists the ten missions with that best time and the race's par,
+checks that **Missions** lists the eleven missions with that best time and the race's par,
 that picking the Moon run starts it in the ship at its date aimed at the Moon and closes
 the list, and that **Abandon** ends it. Screenshots are written to the output directory.
 Headless Chromium draws with SwiftShader, which is software WebGL. It runs at

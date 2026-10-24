@@ -67,10 +67,10 @@ Ship descend(MissionRun& run, const std::vector<FlightBody>& bodies, int body, c
 }  // namespace
 
 int main() {
-    SECTION("the mission list: ten missions with unique ids, every kind, and pars on the races only");
+    SECTION("the mission list: eleven missions with unique ids, every kind, and pars on the races only");
     {
         const auto& list = missions();
-        CHECK(list.size() == 10);
+        CHECK(list.size() == 11);
         std::set<std::string> ids, kinds;
         for (const Mission& m : list) {
             CHECK_MSG(ids.insert(m.id).second, m.id);

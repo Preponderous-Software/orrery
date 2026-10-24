@@ -37,8 +37,9 @@ const std::vector<Mission>& missions() {
         m.push_back({"inner-planets", "tour", "The inner planets", "From Earth, land on Mercury, Venus and Mars.", date,
                      "Earth", {land("Mercury"), land("Venus"), land("Mars")}, 0});
         // Races: par is a second under the landing autopilot's time at this date
-        // (24.97 s and 45.97 s). Mass lock caps everyone's approach the same way;
-        // the time is won at the end, on thrusters, where a hard landing counts.
+        // (24.97 s and 46.07 s; Pluto's thin air costs the autopilot 0.1 s). Mass
+        // lock caps everyone's approach the same way; the time is won at the end,
+        // on thrusters, where a hard landing counts.
         m.push_back({"moon-run", "race", "Moon run",
                      "From Earth, land on the Moon. Beat the autopilot: a hard landing counts.", date, "Earth",
                      {land("Moon")}, 24});
@@ -62,6 +63,12 @@ const std::vector<Mission>& missions() {
                      date, "Earth", {pass("1P/Halley", 10000, "pass within 10,000 km of Halley's comet")}, 0});
         m.push_back({"voyager-1", "sightseeing", "Catch Voyager 1", "Catch up with Voyager 1, the farthest spacecraft.",
                      date, "Earth", {pass("Voyager 1", 10000, "pass within 10,000 km of Voyager 1")}, 0});
+        // A race through air: the landing autopilot keeps to 60% of the burn
+        // speed and takes 32.50 s. Par is 2.5 s under that: riding the heat at
+        // 80% of the burn speed wins about 3.5 s (test_atmosphere).
+        m.push_back({"hot-entry", "race", "Hot entry",
+                     "From the Moon, land on Earth. The autopilot runs cool: ride the heat, but do not burn up.", date,
+                     "Moon", {land("Earth")}, 30});
         return m;
     }();
     return list;

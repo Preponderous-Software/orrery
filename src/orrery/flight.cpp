@@ -18,7 +18,7 @@ constexpr double kLandingFinalKmPerS = 0.03; // the landing autopilot's speed at
 constexpr double kClimbRadii = 0.5;          // from a surface, autopilot climbs this many radii first
 constexpr double kLiftOffDot = 0.1;          // landed, the nose must point this far up to lift off
 constexpr double kCrashRadii = 0.25;         // a crashed ship is put back this many radii above the surface
-constexpr double kAutopilotHeat = 0.6;       // in air, autopilot flies at this fraction of the burn speed (heat ~0.2)
+constexpr double kAutopilotHeat = 0.6;       // in air, autopilot (and a glide) flies at this fraction of the burn speed (heat ~0.2)
 
 // Eases a magnitude toward another in log space, so the drive takes about as
 // long to climb from 2 km/s to 2,000 c as from 2 to 200 km/s.
@@ -60,6 +60,7 @@ void Ship::place(const Vec3& p, const Vec3& fwd) {
     air_ = -1;
     airDensity_ = 0;
     heat_ = 0;
+    gliding_ = false;
 }
 
 void Ship::setTier(int tier) { tier_ = std::clamp(tier, 0, kDriveTierCount - 1); }
@@ -215,8 +216,29 @@ void Ship::fly(double dt, const std::vector<FlightBody>& bodies) {
         }
     }
 
-    // ---- the drive eases toward the throttle's speed
-    const double wanted = throttle_ * topSpeed();
+    // ---- the air the ship is in, if any
+    air_ = -1;
+    airDensity_ = 0;
+    double realPerDrawn = 1;
+    for (int i = 0; i < n; ++i) {
+        const FlightBody& b = bodies[static_cast<size_t>(i)];
+        if (!b.present || b.radius <= 0 || !b.air.present()) continue;
+        const double rho = b.air.density((length(position - b.centre) - b.radius) * b.realPerDrawn);
+        if (rho > airDensity_) {
+            air_ = i;
+            airDensity_ = rho;
+            realPerDrawn = b.realPerDrawn;
+        }
+    }
+    const double g = air_ >= 0 ? bodies[static_cast<size_t>(air_)].air.surfaceGravity : 0.0;
+    gliding_ = air_ >= 0 && g > 0 && !autopilot_ && landed_ < 0 && throttle_ == 0;
+
+    // ---- the drive eases toward the throttle's speed (gliding: the glide speed)
+    double wanted = throttle_ * topSpeed();
+    if (gliding_) {
+        const double glide = std::sqrt(2 * g * kWingKgPerM2 / airDensity_) / 1000;  // real km/s
+        wanted = std::min(glide, kAutopilotHeat * burnSpeed(airDensity_)) / realPerDrawn;
+    }
     if (dt > 0) {
         const double a = 1 - std::exp(-dt / kSpeedEaseSeconds);
         if (wanted == 0 || speed == 0 || (wanted > 0) == (speed > 0)) {
@@ -255,19 +277,6 @@ void Ship::fly(double dt, const std::vector<FlightBody>& bodies) {
     massLock_ = tier_ > 0 && capBody >= 0 && cap < std::fabs(wanted) ? capBody : -1;
 
     // ---- air: drag slows the ship, and speed in it heats the ship
-    air_ = -1;
-    airDensity_ = 0;
-    double realPerDrawn = 1;
-    for (int i = 0; i < n; ++i) {
-        const FlightBody& b = bodies[static_cast<size_t>(i)];
-        if (!b.present || b.radius <= 0 || !b.air.present()) continue;
-        const double rho = b.air.density((length(position - b.centre) - b.radius) * b.realPerDrawn);
-        if (rho > airDensity_) {
-            air_ = i;
-            airDensity_ = rho;
-            realPerDrawn = b.realPerDrawn;
-        }
-    }
     double heating = 0;  // where the heat is heading: (speed / burn speed)^3
     if (air_ >= 0 && speed != 0 && dt > 0) {
         double v = std::fabs(speed) * realPerDrawn * 1000;  // real m/s
@@ -278,8 +287,13 @@ void Ship::fly(double dt, const std::vector<FlightBody>& bodies) {
     if (dt > 0) heat_ += (heating - heat_) * (1 - std::exp(-dt / kHeatSeconds));
     if (heat_ >= 1 && air_ >= 0) burnUp(air_, bodies[static_cast<size_t>(air_)], std::fabs(speed) * realPerDrawn);
 
-    // ---- move, and stop at any surface
-    position += forward * (speed * dt);
+    // ---- move (a glide also sinks), and stop at any surface
+    Vec3 velocity = forward * speed;
+    if (gliding_ && air_ >= 0) {
+        const Vec3 away = position - bodies[static_cast<size_t>(air_)].centre;
+        if (length(away) > 0) velocity -= normalize(away) * (std::fabs(speed) / kGlideRatio);
+    }
+    position += velocity * dt;
     for (int i = 0; i < n; ++i) {
         const FlightBody& b = bodies[static_cast<size_t>(i)];
         if (!b.present || b.radius <= 0) continue;
@@ -289,7 +303,7 @@ void Ship::fly(double dt, const std::vector<FlightBody>& bodies) {
         if (dist >= floor) continue;
         const Vec3 out = dist > 0 ? rel / dist : -forward;
         position = b.centre + out * floor;
-        if (i != landed_ && dot(forward * speed, out) < 0) contact(i, b, out);
+        if (i != landed_ && dot(velocity, out) < 0) contact(i, b, out, velocity);
     }
     if (speed != 0) {
         arrived_ = -1;
@@ -312,7 +326,7 @@ void Ship::fly(double dt, const std::vector<FlightBody>& bodies) {
     climb_ = 0;
     if (nearest_ >= 0 && landed_ < 0) {
         const Vec3 away = position - bodies[static_cast<size_t>(nearest_)].centre;
-        if (length(away) > 0) climb_ = speed * dot(forward, normalize(away));
+        if (length(away) > 0) climb_ = dot(velocity, normalize(away));
     }
     const double sizeWanted = nearest_ >= 0 ? std::max(kSizePerAltitude * altitude_, kMinSizeKm) : 1.0;
     if (size_ <= 0 || dt <= 0) {
@@ -344,6 +358,7 @@ void Ship::burnUp(int body, const FlightBody& b, double speedKmPerS) {
     air_ = -1;
     airDensity_ = 0;
     heat_ = 0;
+    gliding_ = false;
     Vec3 out = position - b.centre;
     out = length(out) > 0 ? normalize(out) : -forward;
     const double above = std::max(kCrashRadii * b.radius, 1.25 * b.air.topKm() / b.realPerDrawn);
@@ -357,8 +372,8 @@ void Ship::burnUp(int body, const FlightBody& b, double speedKmPerS) {
 // Soft or hard, the ship sits down level on the surface; a crash, or any
 // contact with a body that has no solid surface, puts it back above the
 // surface, at rest and pointing straight up.
-void Ship::contact(int body, const FlightBody& b, const Vec3& out) {
-    const double impact = -dot(forward * speed, out);
+void Ship::contact(int body, const FlightBody& b, const Vec3& out, const Vec3& velocity) {
+    const double impact = -dot(velocity, out);
     touchdown_.body = body;
     touchdown_.impactKmPerS = impact;
     touchdown_.grade = !b.solid                       ? Touchdown::Lost
