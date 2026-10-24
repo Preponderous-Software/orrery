@@ -56,7 +56,7 @@ enum Key {
     kA = 4, kB = 5, kC = 6, kD = 7, kE = 8, kF = 9, kG = 10, kH = 11, kI = 12, kJ = 13, kL = 15, kM = 16, kN = 17, kO = 18, kP = 19,
     kQ = 20, kS = 22, kT = 23, kU = 24, kV = 25, kW = 26, kX = 27, kZ = 29, k1 = 30, k0 = 39, kReturn = 40,
     kEscape = 41, kBackspace = 42, kTab = 43,
-    kSpace = 44, kLeftBracket = 47, kRightBracket = 48, kComma = 54, kPeriod = 55, kHome = 74, kPageUp = 75,
+    kSpace = 44, kMinus = 45, kLeftBracket = 47, kRightBracket = 48, kComma = 54, kPeriod = 55, kHome = 74, kPageUp = 75,
     kPageDown = 78, kRight = 79, kLeft = 80, kDown = 81, kUp = 82,
 };
 constexpr int kShift = 0x0001 | 0x0002;
@@ -389,11 +389,12 @@ struct World {
             view.missionTone = HudTone::Warn;
         }
         if (!panel) return;
-        view.panel.push_back({"MISSIONS   1-9, 0 start one   Backspace abandons   I closes", false, HudTone::Go});
+        view.panel.push_back({"MISSIONS   1-9, 0, - start one   Backspace abandons   I closes", false, HudTone::Go});
         const auto& list = missions();
         for (size_t i = 0; i < list.size(); ++i) {
             char buf[160];
-            std::snprintf(buf, sizeof buf, "%zu  %-12s %-20s %s", (i + 1) % 10, list[i].kind.c_str(),
+            const std::string key = i < 10 ? std::to_string((i + 1) % 10) : "-";
+            std::snprintf(buf, sizeof buf, "%s  %-12s %-20s %s", key.c_str(), list[i].kind.c_str(),
                           list[i].title.c_str(), best(list[i].id).c_str());
             view.panel.push_back({buf, false, HudTone::Plain});
             view.panel.push_back({"   " + list[i].brief, true, HudTone::Dim});
@@ -563,6 +564,8 @@ struct Interactive {
         if (w->panel) {  // the mission list takes the keys while it is open
             if (scancode >= k1 && scancode <= k0) {
                 startMission(scancode == k0 ? 9 : scancode - k1);
+            } else if (scancode == kMinus) {
+                startMission(10);
             } else if (scancode == kBackspace) {
                 w->abandonMission("");
             } else if (scancode == kI || scancode == kEscape) {

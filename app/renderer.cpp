@@ -274,6 +274,9 @@ std::vector<FlightBody> Renderer::flightBodies(const SystemState& state) const {
         sys_.frame(static_cast<int>(i), state.jdTdb, fb.frame);  // a landed ship turns with its body
         fb.solid = hasSolidSurface(bodies[i].kind, bodies[i].naif);
         fb.air = atmosphereOf(bodies[i].naif);
+        if (fb.air.present() && bodies[i].gm > 0 && bodies[i].radiusKm > 0) {
+            fb.air.surfaceGravity = bodies[i].gm / (bodies[i].radiusKm * bodies[i].radiusKm) * 1000;  // km/s^2 -> m/s^2
+        }
         if (fb.radius > 0 && bodies[i].radiusKm > 0) fb.realPerDrawn = bodies[i].radiusKm / fb.radius;
         // The Sun holds everything; a planet its moon system; a moon a few radii.
         if (i == 0) {
@@ -663,7 +666,13 @@ FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, con
     // A daytime sky washes out the faint things: orbits, small bodies, the
     // markers of distant bodies and their labels fade as it brightens, and are
     // gone by 40% daylight. The Sun, the target and nearby spheres stay.
-    const double faint = view.ship ? std::clamp(1 - 2.5 * daylight(*view.ship), 0.0, 1.0) : 1.0;
+    // A thin air's dark sky (Pluto, Triton) washes out little: scaled by how bright its colour is.
+    double washout = 0;
+    if (view.ship && view.ship->air() >= 0) {
+        const Atmosphere air = atmosphereOf(bodies[static_cast<size_t>(view.ship->air())].naif);
+        washout = daylight(*view.ship) * std::min(std::max({air.sky[0], air.sky[1], air.sky[2]}) / 0.9f, 1.0f);
+    }
+    const double faint = std::clamp(1 - 2.5 * washout, 0.0, 1.0);
     if (system > 0 && bodies[static_cast<size_t>(system)].kind == BodyKind::Moon) system = bodies[static_cast<size_t>(system)].parent;
 
     // ---- bodies
@@ -978,6 +987,8 @@ void Renderer::flightHud(const SystemState& state, const CameraState& cam, const
         put(bodies[static_cast<size_t>(td.body)].kind == BodyKind::Star ? "BURNED UP in " + name(td.body)
                                                                          : "LOST in " + name(td.body) + "'s clouds",
             kAlarm, big);
+    } else if (ship.gliding()) {
+        put("GLIDING in " + name(ship.air()) + "'s air: throttle up to fly", kGo, big);
     } else if (ship.arrived() >= 0) {
         put("ARRIVED at " + name(ship.arrived()), kGo, big);
     }

@@ -10,6 +10,7 @@
 #include "check.hpp"
 #include "orrery/atmosphere.hpp"
 #include "orrery/flight.hpp"
+#include "orrery/missions.hpp"
 
 using namespace orrery;
 
@@ -60,9 +61,9 @@ Ship level(const std::vector<FlightBody>& bodies, double altitudeKm, int tier, d
 }  // namespace
 
 int main() {
-    SECTION("the four atmospheres, and none elsewhere");
+    SECTION("the four thick atmospheres, and none on the Sun, Mercury, the Moon or the giants");
     for (long naif : {299L, 399L, 499L, 606L}) CHECK_MSG(atmosphereOf(naif).present(), std::to_string(naif));
-    for (long naif : {10L, 199L, 301L, 599L, 999L}) CHECK_MSG(!atmosphereOf(naif).present(), std::to_string(naif));
+    for (long naif : {10L, 199L, 301L, 599L, 899L}) CHECK_MSG(!atmosphereOf(naif).present(), std::to_string(naif));
     {
         const Atmosphere earth = atmosphereOf(399);
         CHECK(earth.density(0) == 1.217);
@@ -193,6 +194,90 @@ int main() {
         Ship fast = level(big, 60, 2, 20000.0 / kLightKmPerS);  // 20,000 drawn km/s = 40 real km/s
         f = fly(fast, big, 5);
         CHECK(f.burned);
+    }
+
+    SECTION("Pluto and Triton have thin air: a dark sky, and a burn speed several times Earth's");
+    for (long naif : {801L, 999L}) {
+        const Atmosphere thin = atmosphereOf(naif);
+        CHECK(thin.present() && thin.surfaceDensity < 1e-3);
+        CHECK(thin.topKm() > 50 && thin.topKm() < 120);
+        CHECK(burnSpeed(thin.surfaceDensity) > 4 * burnSpeed(1.217));
+        CHECK(std::max({thin.sky[0], thin.sky[1], thin.sky[2]}) < 0.2f);
+    }
+
+    SECTION("gliding: at zero throttle in air the ship glides down instead of stopping, and lands softly on Earth");
+    {
+        auto bodies = world(399, kEarthR);
+        bodies[1].air.surfaceGravity = 9.82;
+        Ship ship = level(bodies, 2, 0, 0.1);  // 2 km up, 200 m/s
+        ship.setThrottle(0);
+        ship.step(kDt, {}, bodies);
+        CHECK(ship.gliding());
+        const double startAlt = ship.altitude();
+        for (int k = 0; k < 120; ++k) ship.step(kDt, {}, bodies);
+        CHECK_MSG(ship.speed > 0.05, std::to_string(ship.speed));  // still flying: not stopped
+        CHECK(ship.altitude() < startAlt && ship.climb() < 0);     // and sinking
+        const Flight f = fly(ship, bodies, 300);
+        CHECK(ship.landed() == 1 && !f.burned);
+        CHECK_MSG(ship.touchdown().grade == Touchdown::Soft, std::to_string(ship.touchdown().impactKmPerS));
+
+        Ship powered = level(bodies, 2, 0, 0.1);  // throttle on: no glide, no sink
+        for (int k = 0; k < 120; ++k) powered.step(kDt, {}, bodies);
+        CHECK(!powered.gliding() && std::fabs(powered.climb()) < 0.01);
+        auto noG = world(399, kEarthR);  // no gravity known: no glide, the ship stops as before
+        Ship stops = level(noG, 2, 0, 0.1);
+        stops.setThrottle(0);
+        for (int k = 0; k < 600; ++k) stops.step(kDt, {}, noG);
+        CHECK(!stops.gliding() && stops.speed == 0);
+    }
+
+    SECTION("hot entry: riding the heat beats the landing autopilot from the Moon to Earth; too hot burns up");
+    {
+        auto bodies = world(399, kEarthR);
+        bodies[1].air.surfaceGravity = 9.82;
+        bodies.push_back({kAt + Vec3{384400, 0, 0}, 1737.4, 12 * 1737.4, true, {}, true, {}, 1});
+        // On the landing autopilot to the air's top, then by hand: nose at
+        // Earth's centre at `ride` x the burn speed, and thrusters at 25% (a
+        // hard landing) for the last 2 km.
+        auto race = [&](double ride, bool& burned) {
+            Ship ship;
+            Vec3 p, fwd;
+            missionStartPose(bodies[2], bodies[1], p, fwd);
+            ship.place(p, fwd);
+            ship.setTarget(1);
+            ship.engageLanding(true);
+            double t = 0;
+            burned = false;
+            for (; t < 120 && ship.landed() < 0; t += kDt) {
+                if (ride > 0 && ship.air() >= 0) {
+                    if (ship.autopilot()) ship.allStop();
+                    const Vec3 to = normalize(kAt - ship.position);
+                    const Vec3 side = std::fabs(to.z) < 0.9 ? Vec3{0, 0, 1} : Vec3{1, 0, 0};
+                    ship.forward = to;
+                    ship.up = normalize(side - to * dot(side, to));
+                    double v = ship.altitude() < 2 ? 0.5 : ride * burnSpeed(ship.airDensity());
+                    int tier = 0;
+                    while (tier < kDriveTierCount - 1 && kDriveTiers[tier].topKmPerS < v) ++tier;
+                    ship.setTier(tier);
+                    ship.setThrottle(v / ship.topSpeed());
+                }
+                ship.step(kDt, {}, bodies);
+                if (ship.touchdown().grade == Touchdown::Burned) {
+                    burned = true;
+                    break;
+                }
+            }
+            return t;
+        };
+        bool burned = false;
+        const double autopilot = race(0, burned);
+        CHECK(!burned);
+        const double hand = race(0.8, burned);
+        CHECK(!burned);
+        CHECK_MSG(hand < autopilot - 3, std::to_string(hand) + " vs " + std::to_string(autopilot));
+        race(0.95, burned);
+        CHECK(burned);
+        std::printf("    autopilot %.2f s, riding at 80%% %.2f s\n", autopilot, hand);
     }
 
     return check::finish();

@@ -144,7 +144,7 @@ NAIF. The orrery is not endorsed by NASA or JPL.
 
 ### Air
 
-The ship flies through the air of Venus, Earth, Mars and Titan (`src/orrery/atmosphere.cpp`). Each air is drawn as one exponential layer, density = surface density × exp(−altitude / scale height). It is cut off where it thins to 10⁻⁶ kg/m³: about 286 km up on Venus, 119 km on Earth, 107 km on Mars and 325 km on Titan.
+The ship flies through the air of Venus, Earth, Mars, Titan, Pluto and Triton (`src/orrery/atmosphere.cpp`). Each air is drawn as one exponential layer, density = surface density × exp(−altitude / scale height). It is cut off where it thins to 10⁻⁶ kg/m³: about 286 km up on Venus, 119 km on Earth, 107 km on Mars, 325 km on Titan, 80 km on Pluto and 70 km on Triton.
 
 | Body | Surface density | Scale height | Source |
 |---|---|---|---|
@@ -152,10 +152,12 @@ The ship flies through the air of Venus, Earth, Mars and Titan (`src/orrery/atmo
 | Earth | 1.217 kg/m³ | 8.5 km | NASA NSSDCA *Earth Fact Sheet* |
 | Mars | 0.016 kg/m³ | 11.0 km | NASA NSSDCA *Mars Fact Sheet* (~0.016 ± 0.006 kg/m³) |
 | Titan | 5.24 kg/m³ | 21 km | **Derived, not quoted.** From a surface pressure of 1.5 bar (Lindal et al. 1983, *Icarus* 53, 348), a surface temperature of 94 K (Flasar et al. 2005, *Science* 308, 975), and 94.2% N₂ and 5.65% CH₄ (mean molar mass 27.3 g/mol), by the ideal gas law. The scale height is RT/(Mg) at the surface (g = 1.352 m/s²), inside the 15–50 km range usually quoted for Titan's air. |
+| Pluto | 9.1 × 10⁻⁵ kg/m³ | 17.8 km | **Derived, not quoted.** From a surface pressure of about 1 Pa and a near-surface temperature of 37 K measured by New Horizons (Gladstone et al. 2016, *Science* 351, aad8866), in nitrogen (28.0 g/mol), by the ideal gas law. The scale height is RT/(Mg) at the surface (g = 0.616 m/s² from the catalogue's GM and radius), within the 17–19 km quoted for the lowest layer. |
+| Triton | 1.24 × 10⁻⁴ kg/m³ | 14.5 km | **Derived, not quoted.** From a surface pressure of 1.4 Pa measured by Voyager 2 in 1989 (McKinnon & Kirk 2014, *Encyclopedia of the Solar System*, 3rd ed.) and 38 K, the low end of the 37.9–46.1 K range (Nobis & Chevrier 2025, *Planetary Science Journal* 6, 132), in nitrogen, by the ideal gas law (g = 0.780 m/s²). |
 
 - **Sources:** NASA NSSDCA planetary fact sheets (<https://nssdc.gsfc.nasa.gov/planetary/factsheet/>). These are NASA works and are not subject to copyright in the United States.
-- **Game choices, not data:** the single layer, the cut-off, the burn speed (5 km/s at a density of 1.217 kg/m³, scaling as density^(−1/6), the shape of the Sutton–Graves heating law), the ship's ballistic coefficient (10,000 kg/m²), the heat's 3 s time constant, and the sky colours.
-- **Left out:** Pluto's and Triton's air (a few pascals), and the giant planets' air. The ship is lost at a giant's drawn radius before its air would matter.
+- **Game choices, not data:** the single layer, the cut-off, the burn speed (5 km/s at a density of 1.217 kg/m³, scaling as density^(−1/6), the shape of the Sutton–Graves heating law), the ship's ballistic coefficient (10,000 kg/m²), the heat's 3 s time constant, the wing loading (400 kg/m²) and glide ratio (5) for gliding, and the sky colours. A glide uses each body's surface gravity, GM / r², from the catalogue's NAIF GM and radius.
+- **Left out:** the giant planets' air. The ship is lost at a giant's drawn radius before its air would matter.
 
 ### Ring radii
 

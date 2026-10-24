@@ -70,6 +70,14 @@ constexpr double kHardLandingKmPerS = 0.6;
 constexpr double kBallisticKgPerM2 = 10000;
 constexpr double kHeatSeconds = 3;
 
+// Gliding: in air at zero throttle, off autopilot, the ship glides instead of
+// stopping. It flies at the speed where its wings hold its weight,
+// sqrt(2 g W / density), but never faster than the autopilot's cool speed,
+// and sinks at that speed / kGlideRatio. Game values for wing loading and
+// glide ratio; g is the body's surface gravity.
+constexpr double kWingKgPerM2 = 400;
+constexpr double kGlideRatio = 5;
+
 struct Touchdown {
     // Lost: into a body with no solid surface. Burned: too fast in a body's air
     // (impactKmPerS is then the speed, in real km/s).
@@ -127,6 +135,7 @@ public:
     int air() const { return air_; }              // the body whose air the ship is in, or -1
     double airDensity() const { return airDensity_; }  // kg/m^3 there
     double heat() const { return heat_; }         // 0 cold .. 1 burning up
+    bool gliding() const { return gliding_; }     // in air at zero throttle: gliding down
     // Where autopilot stops: a few radii out from the target.
     static double standoff(const FlightBody& b);
 
@@ -134,7 +143,7 @@ private:
     void ride(const std::vector<FlightBody>& bodies);
     void turn(double pitch, double yaw, double roll);
     void fly(double dt, const std::vector<FlightBody>& bodies);
-    void contact(int body, const FlightBody& b, const Vec3& out);
+    void contact(int body, const FlightBody& b, const Vec3& out, const Vec3& velocity);
     void burnUp(int body, const FlightBody& b, double speedKmPerS);
     double airCap(const std::vector<FlightBody>& bodies) const;
 
@@ -153,6 +162,7 @@ private:
     int massLock_ = -1, landed_ = -1, arrived_ = -1;
     int air_ = -1;
     double airDensity_ = 0, heat_ = 0;
+    bool gliding_ = false;
     Touchdown touchdown_;
     // While landed: the ship in its body's axes, so it turns with the body.
     Vec3 localPos_, localForward_, localUp_;

@@ -1,5 +1,5 @@
-// The air of the solid bodies that have much of it: Venus, Earth, Mars and
-// Titan. Each is one exponential layer, density = surface density *
+// The air of the solid bodies that have any to speak of: Venus, Earth, Mars and
+// Titan, and the thin air of Pluto and Triton. Each is one exponential layer, density = surface density *
 // exp(-altitude / scale height), cut off where it thins to kAirTopDensity.
 // The surface densities and scale heights are real (DATA_SOURCES.md); the
 // single layer, the cut-off and the sky colours are game choices.
@@ -13,6 +13,7 @@ struct Atmosphere {
     double surfaceDensity = 0;  // kg/m^3; 0 = no air
     double scaleHeightKm = 0;
     float sky[3] = {0, 0, 0};   // the daytime sky from the surface
+    double surfaceGravity = 0;  // m/s^2, for gliding; set by the caller (0 = no gliding)
     bool present() const { return surfaceDensity > 0; }
     double topKm() const;                    // where the density falls to kAirTopDensity
     double density(double altitudeKm) const;  // kg/m^3; altitude in real km
