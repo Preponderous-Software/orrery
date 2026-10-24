@@ -489,7 +489,6 @@ struct Interactive {
     bool paused = false, running = true, dragging = false, entering = false;
     std::string entry;
     bool keys[512] = {};
-    std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
     int shot = 0;
     long frames = 0;
     double stickX = 0, stickY = 0;  // the page's thumb stick, -1..1 (right, up)
@@ -703,9 +702,8 @@ struct Interactive {
             w->height = dh;
         }
 #endif
-        const auto now = std::chrono::steady_clock::now();
-        const double dt = std::min(std::chrono::duration<double>(now - last).count(), 0.1);
-        last = now;
+        // The engine's frame clock (measured, or a test harness's fixed step), capped.
+        const double dt = std::min(w->engine->frameSeconds(), 0.1);
         const double rate = kRates[rateIndex];
         CameraState& cam = w->cam;
         Renderer& renderer = *w->renderer;
@@ -1039,8 +1037,14 @@ int main(int argc, char** argv) {
 
         // ---- interactive
 #if !defined(__EMSCRIPTEN__)
-        world->recordsFile = recordsPath();  // headless runs never read or write records
-        world->loadRecords();
+        // Headless runs never read or write records, and neither does a run a
+        // test harness drives (Strata's STRATA_DRIVE): its bests are not the player's.
+        if (world->engine->driven()) {
+            std::puts("orrery: driven by a test harness; mission records are not read or written");
+        } else {
+            world->recordsFile = recordsPath();
+            world->loadRecords();
+        }
 #endif
         auto* live = new Interactive(std::move(world), rateIndexFor(args.rate));
         if (live->w->missionPending >= 0) {

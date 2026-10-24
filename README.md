@@ -212,7 +212,7 @@ becomes the target. When a goal is done, the target moves on to the next one.
 - **Landings** count when they are soft or hard; a crash, or reaching the Sun or a giant planet, does not. Precision landings count only where they ask, and the HUD says where the ship came down when it misses.
 - **Races.** Mass lock caps everyone's approach the same way, and the landing autopilot flies close to that cap: 24.97 s to the Moon and 45.97 s to Pluto. Par is a second under that. The time is won at the end: under mass lock to within about a kilometre, then thrusters at about 30%, where a hard landing counts. `test_missions` flies that by hand and beats the autopilot by 1.8 s.
 - **Flybys** are measured between steps, so a pass at warp 3, which can cover millions of kilometres in a frame, still counts.
-- **Best times** are kept per device: in the browser's `localStorage`, and on the desktop in `records.txt` under `$XDG_DATA_HOME/orrery` (or `~/.local/share/orrery`; `%APPDATA%\orrery` on Windows; `$ORRERY_RECORDS` overrides it). Headless runs never read or write them.
+- **Best times** are kept per device: in the browser's `localStorage`, and on the desktop in `records.txt` under `$XDG_DATA_HOME/orrery` (or `~/.local/share/orrery`; `%APPDATA%\orrery` on Windows; `$ORRERY_RECORDS` overrides it). Headless runs never read or write them, and neither does a run a test harness drives through Strata's drive channel (`STRATA_DRIVE`; Strata `docs/DRIVE.md`, playtester's `orrery-strata` profile), which takes its frame time from `engine.frameSeconds()` so a stepped harness gets the same frames on every run.
 
 ## What is drawn, and from what
 
