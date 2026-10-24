@@ -129,6 +129,8 @@ if(ORRERY_WITH_STRATA)
       "--preload-file=${ORRERY_WEB_DATA}@/data"
       "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html")
     set_property(TARGET orrery APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html")
+    # The page's ?bench mode (web/bench.js) is served next to it.
+    configure_file(web/bench.js "${CMAKE_CURRENT_BINARY_DIR}/bench.js" COPYONLY)
   endif()
 
   if(ORRERY_BUILD_TESTS)
