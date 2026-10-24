@@ -135,10 +135,11 @@ if(ORRERY_WITH_STRATA)
              --mission moon-run --land --no-small-bodies --width 160 --height 90
              --frames "${CMAKE_CURRENT_BINARY_DIR}/mission_moon_run" --count 800 --step 0)
     set_tests_properties(mission_moon_run PROPERTIES PASS_REGULAR_EXPRESSION "mission moon-run complete")
-    # The landing autopilot comes down through Mars's air softly and stays cool (heat under 50%).
+    # The landing autopilot comes down through Earth's air softly and stays cool (heat under 50%),
+    # and under its daytime sky no labels are drawn (Mercury and Venus are in view).
     add_test(NAME land_through_air COMMAND orrery --data "${CMAKE_CURRENT_SOURCE_DIR}/data" --headless
-             --mode true --enlarge 1 --date 2026-11-24 --ship --target Mars --land --no-small-bodies
-             --width 160 --height 90 --frames "${CMAKE_CURRENT_BINARY_DIR}/land_through_air" --count 1500 --step 0)
-    set_tests_properties(land_through_air PROPERTIES PASS_REGULAR_EXPRESSION "touchdown soft on Mars, hottest [1-4]?[0-9]%")
+             --mode true --enlarge 1 --date 2026-11-24 --ship --target Earth --land --no-small-bodies
+             --width 640 --height 360 --frames "${CMAKE_CURRENT_BINARY_DIR}/land_through_air" --count 1500 --step 0)
+    set_tests_properties(land_through_air PROPERTIES PASS_REGULAR_EXPRESSION "touchdown soft on Earth, hottest [1-4]?[0-9]%, 0 labels")
   endif()
 endif()

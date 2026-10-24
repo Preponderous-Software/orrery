@@ -485,18 +485,25 @@ void Renderer::addShip(const Ship& ship, const Vec3& origin) {
     }
 }
 
-// The sky from inside a body's air: its colour, as bright as the air above
-// is thick (the column above goes as the density here), on the day side only.
-// Never at full strength, so the HUD stays readable against it.
-std::array<float, 3> Renderer::skyColor(const Ship& ship) const {
-    if (ship.air() < 0) return {0, 0, 0};
+// How bright the sky is from inside a body's air, 0 (black) to 1: as bright
+// as the air above is thick (the column above goes as the density here), on
+// the day side only.
+double Renderer::daylight(const Ship& ship) const {
+    if (ship.air() < 0) return 0;
     const auto i = static_cast<size_t>(ship.air());
     const Atmosphere air = atmosphereOf(sys_.bodies()[i].naif);
     const Vec3 normal = normalize(ship.position - drawn_[i]);
     const double sunUp = dot(normal, normalize(drawn_[0] - drawn_[i]));
     const double day = std::clamp((sunUp + 0.1) / 0.3, 0.0, 1.0);
-    const double thick = std::sqrt(std::min(ship.airDensity() / air.surfaceDensity, 1.0));
-    const float k = f(0.7 * day * thick);
+    return day * std::sqrt(std::min(ship.airDensity() / air.surfaceDensity, 1.0));
+}
+
+// The sky's colour: the air's, never at full strength, so the HUD stays
+// readable against it.
+std::array<float, 3> Renderer::skyColor(const Ship& ship) const {
+    if (ship.air() < 0) return {0, 0, 0};
+    const Atmosphere air = atmosphereOf(sys_.bodies()[static_cast<size_t>(ship.air())].naif);
+    const float k = f(0.7 * daylight(ship));
     return {air.sky[0] * k, air.sky[1] * k, air.sky[2] * k};
 }
 
@@ -653,6 +660,10 @@ FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, con
 
     // Which planet system the camera is in: its moons get orbits and labels.
     int system = cam.freeFly ? -1 : view.ship ? view.ship->anchor() : cam.focus;
+    // A daytime sky washes out the faint things: orbits, small bodies, the
+    // markers of distant bodies and their labels fade as it brightens, and are
+    // gone by 40% daylight. The Sun, the target and nearby spheres stay.
+    const double faint = view.ship ? std::clamp(1 - 2.5 * daylight(*view.ship), 0.0, 1.0) : 1.0;
     if (system > 0 && bodies[static_cast<size_t>(system)].kind == BodyKind::Moon) system = bodies[static_cast<size_t>(system)].parent;
 
     // ---- bodies
@@ -702,8 +713,8 @@ FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, con
             default: marker.size_pixels = 4; break;
         }
         std::memcpy(marker.color, b.color, sizeof b.color);
-        marker.color[3] = state.extrapolated[i] ? 0.5f : 1.0f;
-        points_.push_back(marker);
+        marker.color[3] = f((state.extrapolated[i] ? 0.5 : 1.0) * (static_cast<int>(i) == cam.focus ? 1.0 : faint));
+        if (marker.color[3] > 0) points_.push_back(marker);
         if (view.axes && b.hasPole && drawnRadius_[i] > 0) {
             Vec3 pole;
             sys_.pole(static_cast<int>(i), state.jdTdb, pole);
@@ -713,7 +724,7 @@ FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, con
     }
 
     // ---- small bodies
-    if (view.smallBodies) {
+    if (view.smallBodies && faint > 0) {
         const auto& sbs = sys_.smallBodies();
         for (size_t k = 0; k < drawnSmall_.size(); ++k) {
             const SmallBodyGroup& g = sys_.groups()[static_cast<size_t>(sbs[k].group)];
@@ -721,13 +732,14 @@ FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, con
             setVec(p.position, drawnSmall_[k] - origin);
             p.size_pixels = 2.0f;
             std::memcpy(p.color, g.color, sizeof g.color);
-            p.color[3] = 0.75f;
+            p.color[3] = f(0.75 * faint);
             points_.push_back(p);
         }
     }
 
     // ---- orbits, trajectories, rings
-    if (view.orbits) {
+    const size_t orbitsFrom = lines_.size();
+    if (view.orbits && faint > 0) {
         for (size_t i = 1; i < bodies.size(); ++i) {
             const Body& b = bodies[i];
             const bool show = b.kind == BodyKind::Planet || b.kind == BodyKind::Dwarf || b.kind == BodyKind::Comet ||
@@ -749,6 +761,7 @@ FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, con
             }
         }
     }
+    for (size_t k = orbitsFrom; k < lines_.size(); ++k) lines_[k].color[3] *= f(faint);
     for (size_t i = 1; i < bodies.size(); ++i) {
         if (bodies[i].kind == BodyKind::Planet) addRings(static_cast<int>(i), state, view.scale, origin);
     }
@@ -779,7 +792,7 @@ FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, con
     }
 
     // ---- labels
-    if (view.labels) {
+    if (view.labels && faint > 0) {
         const float* pr = camera.projection;
         struct Rect {
             float x0, y0, x1, y1;
@@ -842,7 +855,10 @@ FrameReport Renderer::draw(const SystemState& state, const CameraState& cam, con
                 if (d.body != i && d.w < clipW && std::hypot(nx - d.x, ny - d.y) < d.r) return;
             }
             taken.push_back(r);
-            text(x, y, size, bodies[i].kind == BodyKind::Moon ? kDim : kWhite, name);
+            float color[4];
+            std::memcpy(color, bodies[i].kind == BodyKind::Moon ? kDim : kWhite, sizeof color);
+            color[3] *= f(faint);
+            text(x, y, size, color, name);
             ++report.labels;
         };
         // Priority order: the Sun, planets, dwarf planets, the focused system's
