@@ -87,6 +87,12 @@ if(ORRERY_BUILD_TESTS)
   target_compile_definitions(test_missions PRIVATE ORRERY_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
   orrery_warnings(test_missions)
   add_test(NAME missions COMMAND test_missions)
+  # Mission records written by released builds still load (tests/fixtures/README.md).
+  add_executable(test_records tests/test_records.cpp)
+  target_link_libraries(test_records PRIVATE orrery_core)
+  target_compile_definitions(test_records PRIVATE ORRERY_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+  orrery_warnings(test_records)
+  add_test(NAME records COMMAND test_records)
 endif()
 
 if(ORRERY_WITH_STRATA)
