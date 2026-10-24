@@ -68,7 +68,7 @@ checks that a drag orbits, that the wheel or a two-finger pinch zooms, and that
 the toolbar changes the focus. It then boards the ship from the toolbar and checks
 that its controls show at once on the phone, but only after the Joystick toggle on
 the desktop. It checks that the throttle lever opens the throttle and stays put, that
-the stick steers and springs back, that a drive button steps the drive, that Land (aimed at Titan) starts the landing autopilot and Stop ends it, that out of any air the ship reports no heat, and that Exit
+the stick steers and springs back, that a drive button steps the drive, that Land (aimed at Titan) starts the landing autopilot and Stop ends it, that out of any air the ship reports no heat, that the drive has burned a little fuel and Tow stays hidden while there is some, and that Exit
 leaves the ship. Last, it loads a best time as the page would from `localStorage`, and
 checks that **Missions** lists the eleven missions with that best time and the race's par,
 that picking the Moon run starts it in the ship at its date aimed at the Moon and closes

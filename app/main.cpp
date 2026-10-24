@@ -11,7 +11,7 @@
 // --no-small-bodies, --no-hud, --axes. Ship: --ship [--drive 1-5] [--throttle F] [--cockpit]
 // [--target NAME [--autopilot | --land]] starts in the ship where the orbit camera would be (with
 // --frames it flies 1/30 s per frame); --altitude KM starts it instead that many real km above the
-// target's surface under the Sun, flying level. --mission ID starts that mission instead (the ship options
+// target's surface under the Sun, flying level; --fuel F starts with that fraction of a full tank. --mission ID starts that mission instead (the ship options
 // still apply; --land and --autopilot fly to its first goal); --missions opens the mission list.
 #include <algorithm>
 #include <chrono>
@@ -55,7 +55,7 @@ namespace {
 // SDL3 scancodes (USB HID usage ids), as Strata reports them.
 enum Key {
     kA = 4, kB = 5, kC = 6, kD = 7, kE = 8, kF = 9, kG = 10, kH = 11, kI = 12, kJ = 13, kL = 15, kM = 16, kN = 17, kO = 18, kP = 19,
-    kQ = 20, kS = 22, kT = 23, kU = 24, kV = 25, kW = 26, kX = 27, kZ = 29, k1 = 30, k0 = 39, kReturn = 40,
+    kQ = 20, kR = 21, kS = 22, kT = 23, kU = 24, kV = 25, kW = 26, kX = 27, kZ = 29, k1 = 30, k0 = 39, kReturn = 40,
     kEscape = 41, kBackspace = 42, kTab = 43,
     kSpace = 44, kMinus = 45, kLeftBracket = 47, kRightBracket = 48, kComma = 54, kPeriod = 55, kHome = 74, kPageUp = 75,
     kPageDown = 78, kRight = 79, kLeft = 80, kDown = 81, kUp = 82,
@@ -88,6 +88,7 @@ struct Args {
     int drive = 1;          // 1 = thrusters .. 5 = warp 3
     double throttle = 0;
     double altitudeKm = -1;  // ship: start this far above the target's surface (real km); < 0 = no
+    double fuel = 1;         // ship: the tank at the start, 0..1
     std::string mission;    // start this mission (an id from missions())
     bool missionsPanel = false;
 };
@@ -99,7 +100,7 @@ int usage() {
         "              [--yaw DEG] [--pitch DEG] [--distance-au AU] [--no-labels] [--no-orbits]\n"
         "              [--no-small-bodies] [--no-hud] [--axes]\n"
         "              [--ship [--drive 1-5] [--throttle F] [--cockpit] [--target NAME [--autopilot | --land]\n"
-        "                      [--altitude KM]]]\n"
+        "                      [--altitude KM]] [--fuel F]]\n"
         "              [--mission ID] [--missions]\n"
         "       orrery --headless ... --screenshot out.png\n"
         "       orrery --headless ... --frames DIR --count N [--step DAYS] [--yaw-step DEG]\n"
@@ -151,6 +152,7 @@ bool parse(int argc, char** argv, Args& a) {
         else if (k == "--autopilot") a.autopilot = true;
         else if (k == "--land") a.land = true;
         else if (k == "--altitude") a.altitudeKm = std::atof(val().c_str());
+        else if (k == "--fuel") a.fuel = std::atof(val().c_str());
         else if (k == "--drive") a.drive = std::atoi(val().c_str());
         else if (k == "--throttle") a.throttle = std::atof(val().c_str());
         else if (k == "--mission") a.mission = val();
@@ -342,6 +344,16 @@ struct World {
         return true;
     }
 
+    // An empty tank's tow: back to the body last landed on, refuelled. A tow
+    // ends a mission (it would be a free trip).
+    void tow() {
+        if (ship.fuel() > 0) return;
+        abandonMission("towed");
+        if (ship.tow(renderer->flightBodies(state)) < 0) return;
+        chaseLook = ship.forward;
+        chaseUp = ship.up;
+    }
+
     void abandonMission(const std::string& why) {
         if (mission.running() && !why.empty()) missionNote = "mission abandoned: " + why;
         mission.abandon();
@@ -464,11 +476,12 @@ struct World {
         if (boardPending || started) {
             if (boardPending) board();
             boardPending = false;
+            if (!args.target.empty() && !started) cam.focus = sys->find(args.target);
+            if (args.altitudeKm >= 0 && !started) boardAbove(cam.focus, args.altitudeKm);  // before the drive is set
+            if (!started) ship.setFuel(args.fuel);
             ship.setTier(args.drive - 1);
             ship.setThrottle(args.throttle);
             ship.speed = args.throttle * ship.topSpeed();  // already up to speed; mass lock still applies
-            if (!args.target.empty() && !started) cam.focus = sys->find(args.target);
-            if (args.altitudeKm >= 0 && !started) boardAbove(cam.focus, args.altitudeKm);
             ship.setTarget(cam.focus);
             ship.engageAutopilot(args.autopilot);
             if (args.land) ship.engageLanding(true);
@@ -597,6 +610,7 @@ struct Interactive {
                 case kT: w->ship.engageAutopilot(!w->ship.autopilot() || w->ship.landing()); return;
                 case kG: w->ship.engageLanding(!w->ship.landing()); return;
                 case kZ: w->ship.allStop(); return;
+                case kR: w->tow(); return;
                 case kC: view.cockpit = !view.cockpit; return;
                 case kPageUp: drive(1); return;
                 case kPageDown: drive(-1); return;
@@ -778,7 +792,7 @@ struct Interactive {
                       "\"labels\":%s,\"orbits\":%s,\"help\":%s,\"firstDate\":\"%s\",\"lastDate\":\"%s\","
                       "\"ship\":%s,\"drive\":\"%s\",\"throttle\":%.3f,\"speed\":%.6g,\"autopilot\":%s,"
                       "\"cockpit\":%s,\"shipTriangles\":%d,\"stickX\":%.3f,\"stickY\":%.3f,"
-                      "\"landing\":%s,\"landed\":%d,\"touchdown\":\"%s\",\"impact\":%.6g,\"heat\":%.3f,\"air\":%d,"
+                      "\"landing\":%s,\"landed\":%d,\"touchdown\":\"%s\",\"impact\":%.6g,\"heat\":%.3f,\"air\":%d,\"fuel\":%.4f,"
                       "\"missionList\":%s,\"mission\":\"%s\",\"missionDone\":%d,\"missionGoals\":%d,"
                       "\"missionSeconds\":%.3f,\"missionComplete\":%s,\"newBest\":%s,\"recordsVersion\":%d}",
                       frames, w->cam.focus, b.name.c_str(), w->cam.freeFly ? "true" : "false",
@@ -793,7 +807,7 @@ struct Interactive {
                       kDriveTiers[ship.tier()].name, ship.throttle(), ship.speed, ship.autopilot() ? "true" : "false",
                       w->view.cockpit ? "true" : "false", report.shipTriangles, stickX, stickY,
                       ship.landing() ? "true" : "false", ship.landed(), touchdownName(ship.touchdown().grade),
-                      ship.touchdown().impactKmPerS, ship.heat(), ship.air(), w->panel ? "true" : "false",
+                      ship.touchdown().impactKmPerS, ship.heat(), ship.air(), ship.fuel(), w->panel ? "true" : "false",
                       run.mission() ? run.mission()->id.c_str() : "", run.mission() ? run.goalsDone() : 0,
                       run.mission() ? run.goalCount() : 0, run.seconds(), run.complete() ? "true" : "false",
                       w->newBest ? "true" : "false", w->recordsVersion);
@@ -1053,10 +1067,10 @@ int main(int argc, char** argv) {
                 std::printf("wrote %d frames to %s\n", count, args.framesDir.c_str());
                 if (cam.ship) {
                     const Touchdown& td = world->ship.touchdown();
-                    std::printf("ship: touchdown %s%s%s, hottest %.0f%%, %d labels in the last frame\n",
+                    std::printf("ship: touchdown %s%s%s, hottest %.0f%%, fuel %.0f%%, %d labels in the last frame\n",
                                 touchdownName(td.grade), td.body >= 0 ? " on " : "",
                                 td.body >= 0 ? sys.bodies()[static_cast<size_t>(td.body)].name.c_str() : "", hottest * 100,
-                                last.labels);
+                                world->ship.fuel() * 100, last.labels);
                 }
             } else {
                 frame("paused");

@@ -948,18 +948,31 @@ void Renderer::flightHud(const SystemState& state, const CameraState& cam, const
     }
     y += big + 6;
 
-    // SPEED  149,896 km/s  (0.50 c)    THROTTLE [########--] 80%
+    // SPEED  149,896 km/s  (0.50 c)    THROTTLE [########--] 80%   FUEL 73%   HEAT 12%
+    // On a narrow screen (a phone): SPEED  149,896 km/s  (0.50 c)  THR 80%  FUEL 73%  HEAT 12%
+    // The full line's length in characters: SPEED, the speed, the throttle bar and %, FUEL and HEAT.
+    const bool hot = ship.air() >= 0 || ship.heat() >= 0.01;
+    const size_t full = 7 + speedText(ship.speed).size() + 28 + (ship.throttle() < 0 ? 8 : 0) + 12 + (hot ? 12 : 0);
+    const bool narrow = 10 + static_cast<float>(full) * big > static_cast<float>(width);
+    const char* gap = narrow ? "  " : "   ";
     x = 10;
     put("SPEED  ", kDim, big);
     put(speedText(ship.speed), kWhite, big);
     const int bars = static_cast<int>(std::lround(std::fabs(ship.throttle()) * 10));
-    put("    THROTTLE [" + std::string(static_cast<size_t>(bars), '#') + std::string(static_cast<size_t>(10 - bars), '-') + "] ",
-        kDim, big);
+    if (narrow) {
+        put("  THR ", kDim, big);
+    } else {
+        put("    THROTTLE [" + std::string(static_cast<size_t>(bars), '#') + std::string(static_cast<size_t>(10 - bars), '-') + "] ",
+            kDim, big);
+    }
     char buf[256];
-    std::snprintf(buf, sizeof buf, "%s%.0f%%", ship.throttle() < 0 ? "reverse " : "", std::fabs(ship.throttle()) * 100);
+    std::snprintf(buf, sizeof buf, "%s%.0f%%", ship.throttle() < 0 ? (narrow ? "-" : "reverse ") : "",
+                  std::fabs(ship.throttle()) * 100);
     put(buf, kWhite, big);
-    if (ship.air() >= 0 || ship.heat() >= 0.01) {
-        std::snprintf(buf, sizeof buf, "   HEAT %.0f%%", std::min(ship.heat(), 1.0) * 100);
+    std::snprintf(buf, sizeof buf, "%sFUEL %.0f%%", gap, std::ceil(ship.fuel() * 100));
+    put(buf, ship.fuel() <= 0.1 ? kAlarm : ship.fuel() <= 0.25 ? kWarn : kWhite, big);
+    if (hot) {
+        std::snprintf(buf, sizeof buf, "%sHEAT %.0f%%", gap, std::min(ship.heat(), 1.0) * 100);
         put(buf, ship.heat() >= 0.75 ? kAlarm : ship.heat() >= 0.4 ? kWarn : kWhite, big);
     }
     y += big + 6;
@@ -969,7 +982,10 @@ void Renderer::flightHud(const SystemState& state, const CameraState& cam, const
     x = 10;
     if (ship.autopilot()) put((ship.landing() ? "LANDING on " : "AUTOPILOT to ") + name(ship.target()), kGo, big);
     const Touchdown& td = ship.touchdown();
-    if (ship.heat() >= 0.75) {
+    if (ship.fuel() <= 0 && ship.landed() < 0) {
+        put(ship.gliding() ? "OUT OF FUEL: gliding down. R or Tow calls a tow" : "OUT OF FUEL: R or Tow calls a tow", kAlarm,
+            big);
+    } else if (ship.heat() >= 0.75) {
         if (ship.autopilot()) put("   ", kDim, big);
         put("HOT: slow down or burn up", kAlarm, big);
     } else if (ship.massLock() >= 0) {
@@ -1131,8 +1147,8 @@ void Renderer::hud(const SystemState& state, const CameraState& cam, const ViewO
             "Home         the Sun",
             "Left drag    orbit the focus          Wheel, PgUp/PgDn  zoom",
             "F            free flight: WASD move, Q/E down/up, drag to look",
-            "V            ship: W/S throttle, wheel drive tier, T autopilot, G land",
-            "I            missions: 1-9, 0 start one; Backspace abandons",
+            "V            ship: W/S throttle, wheel drive tier, T autopilot, G land, R tow",
+            "I            missions: 1-9, 0, - start one; Backspace abandons",
             "M            TRUE / COMPRESSED scale",
             "[ ]          body enlargement (TRUE mode)",
             "O  L  B  X   orbits, labels, small bodies, spin axes",

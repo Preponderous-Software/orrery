@@ -101,6 +101,7 @@
       <button data-hold="8" id="roll-right" title="Roll right (E, hold)" aria-label="Roll right">&#8635;</button>
       <button data-key="10" id="land" title="Land on the target (G)" aria-pressed="false">Land</button>
       <button data-key="29" id="stop" title="All stop (Z)">Stop</button>
+      <button data-key="21" id="tow" title="Out of fuel: call a tow back to where you last landed (R)" hidden>Tow</button>
       <button data-key="6" id="view" title="Chase camera or cockpit (C)" aria-pressed="false">View</button>
       <button data-key="25" id="leave" title="Leave the ship (V)">Exit</button>
     </div>
@@ -247,6 +248,7 @@
     if (!leverHeld) showThrottle(s.throttle);
     document.getElementById('autopilot').setAttribute('aria-pressed', String(s.autopilot && !s.landing));
     document.getElementById('land').setAttribute('aria-pressed', String(!!s.landing));
+    document.getElementById('tow').hidden = !(s.ship && s.fuel <= 0);
     document.getElementById('view').setAttribute('aria-pressed', String(s.cockpit));
     const select = document.getElementById('body');
     if (document.activeElement !== select && String(select.value) !== String(s.focus)) select.value = s.focus;
