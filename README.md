@@ -51,6 +51,10 @@ the second line of the on-screen text always says which one is showing.
 
 ## Building and running
 
+**Downloads.** Releases made once `release.yml` is on `main` carry Windows x64 and Linux x64
+downloads ([docs/RELEASING.md](docs/RELEASING.md)). They hold no JPL data: their `play-orrery`
+script fetches it from JPL on the first run, so they need uv and the network then, too.
+
 You need CMake 3.24 or newer, a C++17 compiler and OpenGL 4.5. Mesa's
 llvmpipe is enough, so no GPU is needed. On Linux you also need the X11
 development headers that SDL3 builds against (`libx11-dev libxext-dev

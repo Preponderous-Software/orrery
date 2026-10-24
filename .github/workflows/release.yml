@@ -1,0 +1,329 @@
+# Builds the desktop orrery for Windows x64 and Linux x64 and attaches the
+# downloads to a GitHub release. macOS is not built.
+#
+#   - Publishing a release (gh release create <tag> ...) or pushing a bare
+#     version tag (0.6.0, no "v") builds both and uploads them to that release.
+#     A pushed tag with no release yet gets a release created for it (a full
+#     release, as every orrery release so far has been).
+#   - A pull request that changes this workflow, CMakeLists.txt or what goes
+#     into a download runs the same build as a dry run, so a packaging change
+#     is checked before it merges.
+#   - workflow_dispatch builds both from the chosen branch and keeps them as
+#     workflow artifacts. Give it a tag to build that tag and attach the builds
+#     to its existing release instead.
+#
+# No NASA/JPL data is in a download (DATA_SOURCES.md: none of it is
+# republished from this repository). A download carries the program, the
+# planet maps (CC BY 4.0), the data tools and the kernel hashes; its
+# play-orrery script fetches the data from JPL on the first run, exactly as a
+# build from source does. See docs/RELEASING.md.
+name: Release
+
+on:
+  release:
+    types: [published]
+  push:
+    tags: ["[0-9]+.[0-9]+.[0-9]+"]
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "CMakeLists.txt"
+      - "tools/release/**"
+      - "tools/fetch_data.py"
+      - "tools/build_catalog.py"
+      - "tools/bodies.py"
+      - "docs/README-download.txt"
+      - "docs/THIRD-PARTY.md"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build and attach to (empty = dry run: workflow artifacts only)"
+        required: false
+        default: ""
+
+# A release created with gh release create also pushes its tag, so both events
+# fire for one release. Keyed on the tag, the later run replaces the earlier.
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  meta:
+    name: Resolve the version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      ref: ${{ steps.resolve.outputs.ref }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Resolve tag and ref
+        id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          case "$EVENT" in
+            release)           tag="$RELEASE_TAG" ;;
+            push)              tag="$REF_NAME" ;;
+            workflow_dispatch) tag="$INPUT_TAG" ;;
+            *)                 tag="" ;;
+          esac
+          if [ -n "$tag" ]; then
+            if ! [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Release tags are bare version numbers such as 0.6.0, not '$tag'."
+              exit 1
+            fi
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "ref=refs/tags/$tag" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.resolve.outputs.ref }}
+
+      - name: Read the project version and check it against the tag
+        id: version
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          version=$(sed -n 's/^project(orrery VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          if [ -z "$version" ]; then
+            echo "::error::Could not read the version from project(orrery VERSION ...) in CMakeLists.txt."
+            exit 1
+          fi
+          if [ -n "$TAG" ] && [ "$version" != "$TAG" ]; then
+            echo "::error::CMakeLists.txt says $version but the tag is $TAG. Bump the project version first (docs/RELEASING.md)."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Building Orrery $version (tag: ${TAG:-none, dry run})"
+
+  linux:
+    name: Linux x64 build
+    needs: meta
+    # The oldest supported runner, so the download runs on older glibc too.
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      GALLIUM_DRIVER: llvmpipe
+      __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/50_mesa.json
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.meta.outputs.ref }}
+
+      - name: Install SDL3 build dependencies and Mesa
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            libx11-dev libxext-dev libxcursor-dev libxi-dev libxfixes-dev libxrandr-dev libxss-dev \
+            libegl-dev libgl-dev libegl1 libegl-mesa0 libgl1-mesa-dri
+
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DORRERY_BUILD_TESTS=OFF
+          cmake --build build -j4 --target orrery
+
+      - name: Assemble the package
+        run: |
+          dir="dist/Orrery-$VERSION-linux-x64"
+          mkdir -p "$dir/tools" "$dir/data"
+          cp build/orrery "$dir/orrery"
+          strip "$dir/orrery"
+          cp tools/release/play-orrery.sh "$dir/play-orrery.sh"
+          chmod +x "$dir/play-orrery.sh" "$dir/orrery"
+          cp tools/fetch_data.py tools/build_catalog.py tools/bodies.py "$dir/tools/"
+          cp data/kernels.sha256 "$dir/data/"
+          cp -r data/textures "$dir/data/textures"
+          cp LICENSE "$dir/LICENSE.txt"
+          cp DATA_SOURCES.md "$dir/DATA_SOURCES.md"
+          cp docs/THIRD-PARTY.md "$dir/THIRD-PARTY.md"
+          cp docs/README-download.txt "$dir/README.txt"
+          # Only system libraries: Strata and SDL3 are linked in; OpenGL is
+          # loaded at run time.
+          ldd "$dir/orrery"
+          if ldd "$dir/orrery" | grep -Ev 'linux-vdso|ld-linux|/lib/x86_64-linux-gnu/lib(c|m|dl|pthread|rt|stdc\+\+|gcc_s)\.so'; then
+            echo "::error::The orrery links a library the download does not carry."
+            exit 1
+          fi
+
+      # The packaged play-orrery.sh is run the way a player runs it: it builds
+      # the data with the packaged tools, then starts the packaged binary. JPL
+      # is not asked again for what CI already holds: the kernels and the API
+      # responses are restored from the same caches the CI workflow keeps,
+      # into the package, and removed again before it is archived.
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.13"
+
+      - name: Cache NAIF kernels
+        uses: actions/cache@v4
+        with:
+          path: data/kernels
+          key: naif-kernels-${{ hashFiles('data/kernels.sha256') }}
+
+      - name: Write the JPL query manifest
+        run: uv run --python 3.12 tools/fetch_data.py plan > build/jpl-query-plan.json
+
+      - name: Cache JPL API responses
+        uses: actions/cache@v4
+        with:
+          path: data/raw
+          key: jpl-raw-${{ hashFiles('build/jpl-query-plan.json') }}
+
+      - name: Fetch data (only what the caches lack)
+        run: uv run --python 3.12 tools/fetch_data.py all
+
+      - name: The packaged orrery builds its data and renders headless
+        env:
+          ORRERY_RECORDS: ${{ runner.temp }}/records.txt
+        run: |
+          dir="dist/Orrery-$VERSION-linux-x64"
+          cp -r data/kernels data/raw "$dir/data/"
+          "$dir/play-orrery.sh" --smoke-test "$RUNNER_TEMP/smoke"
+          ls "$RUNNER_TEMP/smoke"
+
+      - name: Take the JPL data out of the package
+        run: |
+          dir="dist/Orrery-$VERSION-linux-x64"
+          rm -rf "$dir/data/kernels" "$dir/data/raw" "$dir/data/catalog" "$dir/tests" "$dir/tools/__pycache__"
+          find "$dir" | sort
+          if [ -n "$(find "$dir" -name '*.bsp' -o -name '*.tpc' -o -name '*.gz' -o -name '*.csv')" ]; then
+            echo "::error::JPL data is still in the package."
+            exit 1
+          fi
+
+      - name: Archive
+        run: |
+          cd dist
+          tar -czf "Orrery-$VERSION-linux-x64.tar.gz" "Orrery-$VERSION-linux-x64"
+          sha256sum "Orrery-$VERSION-linux-x64.tar.gz" > "Orrery-$VERSION-linux-x64.tar.gz.sha256"
+          ls -l
+
+      - name: Upload the smoke frames
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-smoke-linux
+          path: ${{ runner.temp }}/smoke
+          if-no-files-found: ignore
+
+      - name: Upload the package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Orrery-${{ env.VERSION }}-linux-x64
+          path: |
+            dist/Orrery-${{ env.VERSION }}-linux-x64.tar.gz
+            dist/Orrery-${{ env.VERSION }}-linux-x64.tar.gz.sha256
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64 build
+    needs: meta
+    runs-on: windows-2022
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.meta.outputs.ref }}
+
+      # The static C++ runtime (/MT), so a Windows install without the Visual
+      # C++ Redistributable runs the orrery.
+      - name: Build
+        run: |
+          cmake -S . -B build -A x64 -DORRERY_BUILD_TESTS=OFF "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build --config Release --parallel --target orrery
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Assemble the package
+        run: |
+          $dir = "dist/Orrery-$env:VERSION-win-x64"
+          New-Item -ItemType Directory -Force "$dir/tools", "$dir/data" | Out-Null
+          Copy-Item build/Release/orrery.exe "$dir/orrery.exe"
+          Copy-Item tools/release/play-orrery.bat "$dir/play-orrery.bat"
+          Copy-Item tools/fetch_data.py, tools/build_catalog.py, tools/bodies.py "$dir/tools/"
+          Copy-Item data/kernels.sha256 "$dir/data/"
+          Copy-Item -Recurse data/textures "$dir/data/textures"
+          Copy-Item LICENSE "$dir/LICENSE.txt"
+          Copy-Item DATA_SOURCES.md "$dir/DATA_SOURCES.md"
+          Copy-Item docs/THIRD-PARTY.md "$dir/THIRD-PARTY.md"
+          Copy-Item docs/README-download.txt "$dir/README.txt"
+
+      # The runner has no OpenGL 4.5 driver, so the orrery cannot draw here.
+      # What is checked is that the executable imports only DLLs every Windows
+      # install has: no Visual C++ runtime, no SDL3.dll.
+      - name: The executable needs no DLL the download lacks
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -Last 1
+          $out = & $dumpbin.FullName /dependents "dist/Orrery-$env:VERSION-win-x64/orrery.exe"
+          $out | Write-Host
+          $dlls = $out | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim().ToLower() }
+          $bad = $dlls | Where-Object { $_ -match '^(msvcp|vcruntime|concrt|sdl)' }
+          if ($bad) { Write-Error "orrery.exe imports $($bad -join ', '), which the download does not carry."; exit 1 }
+
+      - name: Archive
+        run: |
+          Compress-Archive -Path "dist/Orrery-$env:VERSION-win-x64" `
+            -DestinationPath "dist/Orrery-$env:VERSION-win-x64.zip"
+          $hash = (Get-FileHash "dist/Orrery-$env:VERSION-win-x64.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  Orrery-$env:VERSION-win-x64.zip" | Out-File -Encoding ascii -NoNewline "dist/Orrery-$env:VERSION-win-x64.zip.sha256"
+          Get-ChildItem dist
+
+      - name: Upload the package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Orrery-${{ env.VERSION }}-win-x64
+          path: |
+            dist/Orrery-${{ env.VERSION }}-win-x64.zip
+            dist/Orrery-${{ env.VERSION }}-win-x64.zip.sha256
+          if-no-files-found: error
+
+  attach:
+    name: Attach to the release
+    needs: [meta, linux, windows]
+    if: needs.meta.outputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.meta.outputs.tag }}
+    steps:
+      - name: Download the packages
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # A tag pushed on its own has no release yet; one is made as a full
+      # release, as every orrery release so far has been. A release made with
+      # GITHUB_TOKEN does not start this workflow again.
+      - name: Make sure the release exists
+        run: |
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --generate-notes --title "Orrery $TAG"
+          fi
+
+      - name: Upload to the release
+        run: |
+          ls -l dist
+          gh release upload "$TAG" dist/* --clobber
