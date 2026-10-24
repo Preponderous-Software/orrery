@@ -146,6 +146,11 @@ if(ORRERY_WITH_STRATA)
     add_test(NAME land_through_air COMMAND orrery --data "${CMAKE_CURRENT_SOURCE_DIR}/data" --headless
              --mode true --enlarge 1 --date 2026-11-24 --ship --target Earth --land --no-small-bodies
              --width 640 --height 360 --frames "${CMAKE_CURRENT_BINARY_DIR}/land_through_air" --count 1500 --step 0)
+    # A glide at zero throttle from 500 m over Earth comes down softly (about 32 s).
+    add_test(NAME glide_to_earth COMMAND orrery --data "${CMAKE_CURRENT_SOURCE_DIR}/data" --headless
+             --date 2026-11-24 --enlarge 1 --ship --target Earth --altitude 0.5 --no-small-bodies
+             --width 160 --height 90 --frames "${CMAKE_CURRENT_BINARY_DIR}/glide_to_earth" --count 1200 --step 0)
+    set_tests_properties(glide_to_earth PROPERTIES PASS_REGULAR_EXPRESSION "touchdown soft on Earth, hottest 0%")
     set_tests_properties(land_through_air PROPERTIES PASS_REGULAR_EXPRESSION "touchdown soft on Earth, hottest [1-4]?[0-9]%, 0 labels")
   endif()
 endif()

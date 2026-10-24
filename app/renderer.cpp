@@ -590,7 +590,8 @@ void Renderer::addTargetMarker(int body, const CameraState& cam, const Vec3& ori
     const double a = std::atan2(y, x);
     const float rx = static_cast<float>(width) * 0.42f, ry = static_cast<float>(height) * 0.40f;
     const float px = static_cast<float>(width) / 2 + rx * f(std::cos(a));
-    const float py = static_cast<float>(height) / 2 - ry * f(std::sin(a));
+    // Never down into the flight HUD, which fills the bottom of the screen.
+    const float py = std::min(static_cast<float>(height) / 2 - ry * f(std::sin(a)), static_cast<float>(height) * 0.6f);
     const char* arrow = std::fabs(x) > std::fabs(y) ? (x > 0 ? ">" : "<") : (y > 0 ? "^" : "v");
     const std::string s = std::string(arrow) + " " + name;
     text(std::clamp(px - size * static_cast<float>(s.size()) / 2, 4.0f,
