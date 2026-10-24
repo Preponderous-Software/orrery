@@ -83,8 +83,16 @@ private:
     std::string miss_;
 };
 
-// Best times: one "id seconds" line per mission. Lines that do not parse are
-// skipped, so a damaged file loses only those records.
+// Best times: one "id seconds" line per mission (seconds with three decimals,
+// lines sorted by id). Lines that do not parse are skipped, so a damaged file
+// loses only those records.
+//
+// This layout is records format 1, the records.txt every release from 0.1.0 on
+// has written. The file carries no version of its own, so a change to the
+// layout must keep reading format 1 (a migration on load), bump
+// kRecordsFormatVersion, and add a tests/fixtures/v<N>-*.txt written by the new
+// build; the fixtures earlier releases wrote are never edited (tests/test_records.cpp).
+constexpr int kRecordsFormatVersion = 1;
 std::map<std::string, double> parseRecords(const std::string& text);
 std::string formatRecords(const std::map<std::string, double>& records);
 // Keeps a finished time if it beats the record; true when it does.
