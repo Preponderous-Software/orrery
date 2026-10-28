@@ -131,6 +131,16 @@ if(ORRERY_WITH_STRATA)
     set_property(TARGET orrery APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html")
     # The page's ?bench mode (web/bench.js) is served next to it.
     configure_file(web/bench.js "${CMAKE_CURRENT_BINARY_DIR}/bench.js" COPYONLY)
+    # The loading shell (web/strata-kit, vendored from Strata) and its bridge
+    # go inline into the page, with the download's size (web/strata_page.cmake).
+    set_property(TARGET orrery APPEND PROPERTY LINK_DEPENDS
+      "${CMAKE_CURRENT_SOURCE_DIR}/web/strata-kit/strata-loader.js"
+      "${CMAKE_CURRENT_SOURCE_DIR}/web/strata-boot.js")
+    add_custom_command(TARGET orrery POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" "-DHTML=$<TARGET_FILE:orrery>"
+              "-DWASM=$<TARGET_FILE_DIR:orrery>/index.wasm" "-DDATA=$<TARGET_FILE_DIR:orrery>/index.data"
+              "-DWEB=${CMAKE_CURRENT_SOURCE_DIR}/web" -P "${CMAKE_CURRENT_SOURCE_DIR}/web/strata_page.cmake"
+      VERBATIM)
   endif()
 
   if(ORRERY_BUILD_TESTS)

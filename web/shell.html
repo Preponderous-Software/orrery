@@ -21,6 +21,9 @@
   #status { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted);
             pointer-events: none; text-align: center; padding: 16px; }
   #status.error { color: #ff8a80; pointer-events: auto; }
+  #status[hidden] { display: none; }
+  /* The loading shell (web/strata-kit/strata-loader.js) in the page's colours. */
+  :root { --sk-loader-bg: var(--bg); --sk-loader-fg: var(--fg); --sk-loader-accent: var(--accent); }
   nav { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 12px;
         padding-bottom: max(8px, env(safe-area-inset-bottom)); background: var(--bar); border-top: 1px solid var(--line); }
   nav .group { display: flex; gap: 4px; align-items: center; }
@@ -91,7 +94,7 @@
 <div class="stage">
   <canvas id="canvas" tabindex="0" aria-label="The solar system. Drag to orbit, pinch or scroll to zoom."
           oncontextmenu="event.preventDefault()"></canvas>
-  <div id="status">Loading the solar system (about 20 MB of JPL data)...</div>
+  <div id="status" hidden></div>
   <div id="flight" aria-label="Ship controls">
     <div id="flight-buttons" role="group" aria-label="Ship buttons">
       <button data-key="75" id="drive-up" title="Next drive tier (PgUp, wheel up)">Drv +</button>
@@ -151,16 +154,20 @@
 </nav>
 <!-- ?bench: a scripted frame-rate run (web/bench.js); it must load before the engine. -->
 <script src="bench.js"></script>
+<!-- emcc's script tag, kept inert: web/strata-boot.js starts it behind the
+     loading shell. data-bytes is the download's size, stamped by the build. -->
+<template id="strata-glue" data-bytes="0">{{{ SCRIPT }}}</template>
+<!-- The loading shell, vendored from Strata, and its bridge to this build; the
+     build puts both inline (web/strata_page.cmake). -->
+<script src="strata-kit/strata-loader.js"></script>
+<script src="strata-boot.js"></script>
 <script>
   // SDL3 scancodes (USB HID usage ids), as orrery_key takes them.
   const KEY = { tab: 43, space: 44, comma: 54, period: 55, n: 17, m: 16, l: 15, o: 18, h: 11, v: 25,
                 pageUp: 75, pageDown: 78 };
   const status = document.getElementById('status');
   const canvas = document.getElementById('canvas');
-  function fail(text) { status.textContent = text; status.className = 'error'; status.style.display = 'grid'; }
-  if (!document.createElement('canvas').getContext('webgl2')) {
-    fail('This browser has no WebGL 2, which the orrery needs.');
-  }
+  function fail(text) { status.textContent = text; status.className = 'error'; status.hidden = false; }
   var Module = {
     canvas: canvas,
     // Keys reach the orrery only while the canvas has focus, so typing in the
@@ -168,7 +175,6 @@
     preRun: [() => { ENV.SDL_EMSCRIPTEN_KEYBOARD_ELEMENT = '#canvas'; }],
     print: (text) => console.log(text),
     printErr: (text) => console.warn(text),
-    setStatus: (text) => { if (text) status.textContent = text; },
     onAbort: (what) => fail('The orrery stopped: ' + what),
   };
   window.addEventListener('error', (e) => fail('Error: ' + e.message));
@@ -217,7 +223,7 @@
     const date = document.getElementById('date');
     date.min = s.firstDate.slice(0, 10); date.max = s.lastDate.slice(0, 10);
     fit();
-    status.style.display = 'none';
+    StrataBoot.ready();
     canvas.focus({ preventScroll: true });
     window.orreryReady = true;
     setInterval(sync, 250);
@@ -245,6 +251,21 @@
   }
   // The C++ side starts its loop at the end of main(); the exports exist from then on.
   Module.onRuntimeInitialized = () => { const wait = () => (Module._orrery_body_count() > 0 ? ready() : setTimeout(wait, 30)); wait(); };
+
+  // The loading shell: the trailer's first frame behind real progress over the
+  // engine and its JPL data, and the trailer itself, with the reason, if the
+  // live view can't run here. The media are the game's /play trailer.
+  StrataBoot.start({
+    wasm: 'index.wasm',
+    title: 'the solar system',
+    poster: 'https://danielstephenson.dev/trailers/orrery.jpg',
+    posterAlt: 'The orrery: planets and their orbits around the Sun',
+    trailer: { webm: 'https://danielstephenson.dev/trailers/orrery.webm',
+               mp4: 'https://danielstephenson.dev/trailers/orrery.mp4' },
+    trailerLabel: 'A recorded clip of the orrery',
+    fallback: { href: 'https://danielstephenson.dev/play', text: 'More games' },
+    canvas,
+  }).catch(() => {});  // the loading shell already shows why
 
   function fit() {
     if (!api) return;
@@ -490,6 +511,5 @@
     }
   }, { passive: false });
 </script>
-{{{ SCRIPT }}}
 </body>
 </html>

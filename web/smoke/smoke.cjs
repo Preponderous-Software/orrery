@@ -85,6 +85,8 @@ async function shot(page, name) {
     // 'commit': the page's main loop keeps the load event from ever mattering.
     await page.goto(url, { waitUntil: 'commit' });
     await page.waitForFunction(() => window.orreryReady === true, null, { timeout: 120000 });
+    await page.waitForFunction(() => { const r = document.querySelector('.sk-loader'); return r && r.hidden; }, null, { timeout: 10000 });
+    check(await page.evaluate(() => StrataLoader.state === 'done'), 'the loading shell showed and is gone');
     const status = () => page.evaluate(() => window.orrery.status());
     await page.waitForFunction(() => window.orrery.status().frames > 5, null, { timeout: 60000 });
 
@@ -272,6 +274,29 @@ async function shot(page, name) {
     check(true, 'Abandon ends the mission');
     await page.locator('#missions-close').click();
     check(!(await page.locator('#missions').isVisible()), 'the close button hides the list');
+
+    // Without WebGL 2 the loading shell shows the trailer (or its still) and
+    // says why, and the engine never downloads.
+    {
+      const bare = await browser.newContext(phone ? { ...devices['iPhone 13'] } : { viewport: { width: 1280, height: 800 } });
+      await bare.addInitScript(() => {
+        const get = HTMLCanvasElement.prototype.getContext;
+        HTMLCanvasElement.prototype.getContext = function (t, o) { return t === 'webgl2' ? null : get.call(this, t, o); };
+      });
+      const p2 = await bare.newPage();
+      const engine = [];
+      p2.on('request', (r) => { if (/index\.(wasm|data|js)$/.test(r.url())) engine.push(r.url()); });
+      await p2.goto(url, { waitUntil: 'commit' });
+      await p2.waitForFunction(() => window.StrataLoader && StrataLoader.state === 'fallback', null, { timeout: 30000 });
+      const fb = await p2.evaluate(() => {
+        const r = document.querySelector('.sk-loader');
+        return { text: r.innerText, media: !!r.querySelector('video, img'), wide: document.documentElement.scrollWidth > innerWidth };
+      });
+      check(/WebGL 2/.test(fb.text) && fb.media && !fb.wide, 'without WebGL 2 the shell shows the trailer and says why');
+      check(engine.length === 0, 'and nothing of the engine downloads');
+      await p2.screenshot({ path: path.join(out, 'no-webgl2.png') });
+      await bare.close();
+    }
 
     check(errors.length === 0, 'no page errors' + (errors.length ? ': ' + errors.join(' | ') : ''));
     console.log('smoke test passed (' + (phone ? 'phone' : 'desktop') + ')');
