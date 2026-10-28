@@ -54,6 +54,29 @@ copies `web/bench.js` (the `?bench` mode) next to them. These five files are the
 whole site. C++ exceptions use Strata's mode
 (`STRATA_WASM_EXCEPTIONS`, `wasm` by default) for the whole module.
 
+## The loading shell
+
+The page loads behind the Strata web kit's loading shell
+(`web/strata-kit/strata-loader.js`, vendored from Strata at the commit in
+`web/strata-kit/PIN`; `web/strata-kit/update.sh <sha>` re-vendors it). It shows
+the trailer's first frame as a blurred backdrop and real progress over the
+engine and the JPL data together ("7.8 of 18 MB"). The loader streams
+`index.wasm` and hands its bytes to the engine, so nothing downloads twice.
+If the live view can't run (no WebGL 2, the engine stops, the WebGL context is
+lost and does not come back), the shell plays the orrery's trailer instead and
+says why; under `prefers-reduced-motion` it shows the still. A device that
+draws under 12 frames a second is offered the clip without losing the live
+view (not in automated browsers or `?bench` runs). The trailer and its poster
+are the ones on <https://danielstephenson.dev/play>.
+
+`web/strata-boot.js` bridges this classic (non-`MODULARIZE`) build to the
+loader: emcc's script tag sits inert in `<template id="strata-glue">`, the
+bridge starts it, and the engine waits in `Module.instantiateWasm` for the
+loader's bytes. After each link, `web/strata_page.cmake` puts the loader and
+the bridge inline in `index.html` (so the site is still the same five files)
+and stamps the download's size on the template, because the arcade compresses
+on the fly and sends no `Content-Length`.
+
 ## Measuring the frame rate
 
 Open the page with `?bench` (<https://orrery.play.danielstephenson.dev/?bench>)
