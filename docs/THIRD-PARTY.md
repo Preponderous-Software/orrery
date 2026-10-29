@@ -3,7 +3,7 @@
 The orrery's code is MIT-licensed (see `LICENSE`). The downloadable builds
 link in the Strata engine and, through it, the components below, and the
 orrery's own copy of stb_image; every licence here is permissive. Strata is
-fetched at the commit in `strata.ref` (the v0.6.0 tag, `c2d7ee4`), and the
+fetched at the commit in `strata.ref` (the v0.7.0 tag, `20827c3`), and the
 Strata sections below are Strata's own licence and third-party notices at that
 commit.
 
