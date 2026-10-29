@@ -4,7 +4,8 @@ A release is a bare version tag on `main` (`0.6.0`, never `v0.6.0`) with a GitHu
 Every orrery release so far has been a full release, not a pre-release. Publishing the release
 starts [`.github/workflows/release.yml`](../.github/workflows/release.yml), which builds the desktop
 orrery for Windows x64 and Linux x64 and attaches the downloads to the release. macOS is not built.
-The browser build is separate: it deploys to the arcade on every push to `main`
+The browser build is separate: it deploys to the arcade on a push to `main` when the repository
+variable `ARCADE_ENABLED` is `true`, or when its workflow is run by hand
 ([web/README.md](../web/README.md)).
 
 ## Steps
@@ -72,7 +73,7 @@ What each run checks:
 
 A pull request that changes `release.yml`, `CMakeLists.txt`, the launchers, the data tools or the
 download's README and notices runs the same builds as a dry run, keeping the archives as workflow
-artifacts. So does running it by hand, once the workflow is on `main`:
+artifacts. So does running it by hand:
 
 ```bash
 gh workflow run release.yml --ref <branch>             # dry run
