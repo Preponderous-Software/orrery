@@ -138,5 +138,86 @@ int main() {
             }
         }
     }
+
+    SECTION("catalogue queries: find, the kernel's range, osculating orbits, poles and frames");
+    {
+        // find: case-insensitive, then any name containing the key.
+        CHECK(sys.find("JUPITER") == sys.find("Jupiter") && sys.find("Jupiter") > 0);
+        CHECK(sys.find("halley") >= 0 && sys.bodies()[static_cast<size_t>(sys.find("halley"))].name == "1P/Halley");
+        CHECK(sys.find("voyager") == sys.find("Voyager 1"));
+        CHECK(sys.find("Vulcan") == -1);
+
+        // The usable range sits a day inside DE440s's coverage (1849-12-26 to
+        // 2150-01-22), and the whole system evaluates at both ends.
+        CHECK(sys.firstJd() > julianDate({1849, 12, 26, 0, 0, 0}) && sys.firstJd() < julianDate({1849, 12, 28, 0, 0, 0}));
+        CHECK(sys.lastJd() > julianDate({2150, 1, 20, 0, 0, 0}) && sys.lastJd() < julianDate({2150, 1, 22, 0, 0, 0}));
+        for (double jd : {sys.firstJd(), sys.lastJd()}) {
+            SystemState s;
+            sys.evaluate(jd, s, false);
+            CHECK(std::isfinite(length(s.positions[static_cast<size_t>(body("Earth"))])));
+        }
+
+        const double jd = julianDate({2026, 10, 18, 0, 0, 0});
+        SystemState state;
+        sys.evaluate(jd, state, false);
+        Elements el;
+        CHECK(!sys.osculating(sys.sun(), jd, state, el));
+        CHECK(!sys.osculating(body("Voyager 1"), jd, state, el));
+        // Earth around the Sun, from its DE state: the Moon moves Earth's
+        // centre about 12 m/s, so its elements wobble about the EMB's.
+        CHECK(sys.osculating(body("Earth"), jd, state, el));
+        std::printf("  Earth osculating: a %.6f au, e %.5f, i %.4f deg\n", el.a / kAuKm, el.e, el.i);
+        CHECK(std::fabs(el.a / kAuKm - 1.0) < 0.01 && std::fabs(el.e - 0.0167) < 0.003 && el.i < 0.05);
+        // The Moon around Earth (osculating, so the Sun's pull moves a and e).
+        CHECK(sys.osculating(body("Moon"), jd, state, el));
+        std::printf("  Moon osculating: a %.0f km, e %.4f, i %.3f deg\n", el.a, el.e, el.i);
+        CHECK(el.a > 370000 && el.a < 400000 && el.e < 0.1 && std::fabs(el.i - 5.15) < 0.4);
+        // A table body's elements are its table's.
+        const int io = body("Io");
+        CHECK(sys.osculating(io, jd, state, el));
+        const Elements table = sys.bodies()[static_cast<size_t>(io)].table.at(jd);
+        CHECK(el.a == table.a && el.e == table.e && el.i == table.i && el.node == table.node && el.m == table.m);
+        CHECK(el.a > 415000 && el.a < 430000);
+
+        // Poles: none for spacecraft, comets or the dwarf planets with
+        // literature radii; a unit vector for every body that has one.
+        Vec3 p;
+        CHECK(!sys.pole(body("Voyager 1"), jd, p) && !sys.pole(body("Halley"), jd, p) && !sys.pole(body("Eris"), jd, p));
+        for (size_t i = 0; i < sys.bodies().size(); ++i) {
+            if (sys.pole(static_cast<int>(i), jd, p)) CHECK_MSG(std::fabs(length(p) - 1) < 1e-12, sys.bodies()[i].name);
+        }
+        CHECK(sys.pole(body("Earth"), kJ2000, p));
+        CHECK(std::fabs(std::acos(p.z) / kDegToRad - 23.44) < 0.01);  // the J2000 obliquity
+        // The angle the HUD prints as "axial tilt": the IAU pole against the
+        // current orbit's normal. Uranus's IAU north pole is on the ecliptic's
+        // north side and it spins backwards (W decreases), so this angle is
+        // 180 deg minus its 97.77 deg obliquity; the HUD prints it as it is.
+        auto tilt = [&](const char* name) {
+            Elements e;
+            Vec3 pole;
+            const int b = body(name);
+            CHECK(sys.osculating(b, jd, state, e) && sys.pole(b, jd, pole));
+            const double i = e.i * kDegToRad, node = e.node * kDegToRad;
+            const Vec3 normal{std::sin(i) * std::sin(node), -std::sin(i) * std::cos(node), std::cos(i)};
+            return std::acos(dot(pole, normal)) / kDegToRad;
+        };
+        const double earthTilt = tilt("Earth"), uranusTilt = tilt("Uranus");
+        std::printf("  pole to orbit normal: Earth %.3f deg, Uranus %.3f deg\n", earthTilt, uranusTilt);
+        CHECK(std::fabs(earthTilt - 23.44) < 0.05);
+        CHECK(sys.bodies()[static_cast<size_t>(body("Uranus"))].pmRate < 0);
+        CHECK(std::fabs(uranusTilt - (180.0 - 97.77)) < 0.5);
+
+        // Frames: +Z is the pole; the prime meridian comes back after one
+        // sidereal day and is on the far side after half of one.
+        BodyFrame f, later, half;
+        CHECK(!sys.frame(body("Voyager 1"), jd, f));
+        const int earth = body("Earth");
+        CHECK(sys.frame(earth, jd, f) && sys.pole(earth, jd, p));
+        CHECK(length(f.z - p) < 1e-12);
+        const double sidereal = 360.0 / sys.bodies()[static_cast<size_t>(earth)].pmRate;
+        CHECK(sys.frame(earth, jd + sidereal, later) && sys.frame(earth, jd + sidereal / 2, half));
+        CHECK(dot(f.x, later.x) > 1 - 1e-9);
+        CHECK(dot(f.x, half.x) < -1 + 1e-6);
+    }
     return check::finish();
 }
