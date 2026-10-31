@@ -301,6 +301,21 @@ bool SolarSystem::pole(int body, double jd, Vec3& out) const {
     return true;
 }
 
+bool SolarSystem::axialTilt(int body, double jd, const SystemState& state, double& degrees) const {
+    Vec3 spin;
+    Elements el;
+    if (!pole(body, jd, spin) || !osculating(body, jd, state, el)) return false;
+    // The IAU north pole is on the invariable plane's north side whatever way
+    // the body turns; the right-hand-rule pole is the opposite one when it
+    // turns backwards.
+    if (bodies_[static_cast<size_t>(body)].pmRate < 0) spin = -spin;
+    const double si = std::sin(el.i * kDegToRad), ci = std::cos(el.i * kDegToRad);
+    const double node = el.node * kDegToRad;
+    const Vec3 normal{si * std::sin(node), -si * std::cos(node), ci};
+    degrees = std::acos(std::clamp(dot(spin, normal), -1.0, 1.0)) / kDegToRad;
+    return true;
+}
+
 bool SolarSystem::frame(int body, double jd, BodyFrame& out) const {
     const Body& b = bodies_[static_cast<size_t>(body)];
     if (!b.hasPole) return false;

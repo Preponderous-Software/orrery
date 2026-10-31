@@ -100,6 +100,11 @@ public:
 
     // The body's north pole (unit vector, ecliptic J2000) at jdTdb, or false.
     bool pole(int body, double jdTdb, Vec3& out) const;
+    // The body's obliquity (degrees): the angle between its spin pole and the
+    // normal of its current osculating orbit, or false. The spin pole is the
+    // IAU north pole, reversed for a body that spins backwards (pm_rate < 0),
+    // so Venus and Uranus come out near 177 and 98 degrees.
+    bool axialTilt(int body, double jdTdb, const SystemState& state, double& degrees) const;
     // The body's orientation (pole and prime meridian, ecliptic J2000) at
     // jdTdb from its IAU elements (secular terms only), or false.
     bool frame(int body, double jdTdb, BodyFrame& out) const;
