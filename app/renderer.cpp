@@ -1083,14 +1083,9 @@ void Renderer::hud(const SystemState& state, const CameraState& cam, const ViewO
                           b.pmRate < 0 ? " (retrograde)" : "");
             line += buf;
         }
-        Vec3 pole;
-        Elements el;
-        if (b.kind != BodyKind::Moon && sys_.pole(static_cast<int>(i), state.jdTdb, pole) &&
-            sys_.osculating(static_cast<int>(i), state.jdTdb, state, el)) {
-            const double si = std::sin(el.i * kDegToRad), ci = std::cos(el.i * kDegToRad);
-            const double O = el.node * kDegToRad;
-            const Vec3 normal{si * std::sin(O), -si * std::cos(O), ci};
-            std::snprintf(buf, sizeof buf, "   axial tilt %.1f deg", std::acos(std::clamp(dot(pole, normal), -1.0, 1.0)) / kDegToRad);
+        double tilt = 0;
+        if (b.kind != BodyKind::Moon && sys_.axialTilt(static_cast<int>(i), state.jdTdb, state, tilt)) {
+            std::snprintf(buf, sizeof buf, "   axial tilt %.1f deg", tilt);
             line += buf;
         }
         if (!line.empty()) {

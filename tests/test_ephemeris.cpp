@@ -188,24 +188,26 @@ int main() {
         }
         CHECK(sys.pole(body("Earth"), kJ2000, p));
         CHECK(std::fabs(std::acos(p.z) / kDegToRad - 23.44) < 0.01);  // the J2000 obliquity
-        // The angle the HUD prints as "axial tilt": the IAU pole against the
-        // current orbit's normal. Uranus's IAU north pole is on the ecliptic's
-        // north side and it spins backwards (W decreases), so this angle is
-        // 180 deg minus its 97.77 deg obliquity; the HUD prints it as it is.
+        // The angle the HUD prints as "axial tilt": the spin pole against the
+        // current orbit's normal. Venus's and Uranus's IAU north poles are on
+        // the ecliptic's north side but they spin backwards (W decreases), so
+        // their spin poles are the IAU poles reversed and their obliquities
+        // are the usual 177.36 and 97.77 deg rather than 180 deg minus those.
         auto tilt = [&](const char* name) {
-            Elements e;
-            Vec3 pole;
-            const int b = body(name);
-            CHECK(sys.osculating(b, jd, state, e) && sys.pole(b, jd, pole));
-            const double i = e.i * kDegToRad, node = e.node * kDegToRad;
-            const Vec3 normal{std::sin(i) * std::sin(node), -std::sin(i) * std::cos(node), std::cos(i)};
-            return std::acos(dot(pole, normal)) / kDegToRad;
+            double degrees = -1;
+            CHECK_MSG(sys.axialTilt(body(name), jd, state, degrees), name);
+            return degrees;
         };
-        const double earthTilt = tilt("Earth"), uranusTilt = tilt("Uranus");
-        std::printf("  pole to orbit normal: Earth %.3f deg, Uranus %.3f deg\n", earthTilt, uranusTilt);
+        const double earthTilt = tilt("Earth"), venusTilt = tilt("Venus"), uranusTilt = tilt("Uranus");
+        std::printf("  axial tilt: Earth %.3f deg, Venus %.3f deg, Uranus %.3f deg\n", earthTilt, venusTilt, uranusTilt);
         CHECK(std::fabs(earthTilt - 23.44) < 0.05);
+        CHECK(sys.bodies()[static_cast<size_t>(body("Venus"))].pmRate < 0);
         CHECK(sys.bodies()[static_cast<size_t>(body("Uranus"))].pmRate < 0);
-        CHECK(std::fabs(uranusTilt - (180.0 - 97.77)) < 0.5);
+        CHECK(std::fabs(venusTilt - 177.36) < 0.5);
+        CHECK(std::fabs(uranusTilt - 97.77) < 0.5);
+        // None without a pole (Eris) or an orbit (Voyager 1).
+        double none = 0;
+        CHECK(!sys.axialTilt(body("Eris"), jd, state, none) && !sys.axialTilt(body("Voyager 1"), jd, state, none));
 
         // Frames: +Z is the pole; the prime meridian comes back after one
         // sidereal day and is on the far side after half of one.

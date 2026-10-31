@@ -132,7 +132,7 @@ The text at the top left shows the following:
 
 - the date and the time rate.
 - the scale mode.
-- facts about the focused body: radius, rotation period, axial tilt (from the IAU pole and the current orbit), distance from the Sun and from its parent, and where its position comes from.
+- facts about the focused body: radius, rotation period, axial tilt (the spin pole against the current orbit; the spin pole is the IAU pole, reversed for a body that turns backwards, so Venus reads about 177° and Uranus about 98°), distance from the Sun and from its parent, and where its position comes from.
 - a warning when a body is outside its data, either extrapolated or with no trajectory at that date.
 
 ## The ship
@@ -309,7 +309,7 @@ For scale:
 
 The other tests:
 
-- `test_ephemeris` also checks the catalogue's queries on the fetched data: finding a body by any case or by part of its name, the date range a day inside DE440s's coverage with the system evaluating at both ends, osculating orbits (none for the Sun or a spacecraft; Earth's and the Moon's from their DE states; a table body's from its table), poles (unit vectors, none for spacecraft, comets or Eris; Earth's 23.44° from ecliptic north at J2000) and the angle the HUD prints as axial tilt, and body frames whose +Z is the pole and whose prime meridian comes back after one sidereal day.
+- `test_ephemeris` also checks the catalogue's queries on the fetched data: finding a body by any case or by part of its name, the date range a day inside DE440s's coverage with the system evaluating at both ends, osculating orbits (none for the Sun or a spacecraft; Earth's and the Moon's from their DE states; a table body's from its table), poles (unit vectors, none for spacecraft, comets or Eris; Earth's 23.44° from ecliptic north at J2000) and the axial tilt the HUD prints (Earth 23.44°, and Venus 177.36° and Uranus 97.77° from their IAU poles reversed, since they turn backwards; none for Eris or a spacecraft), and body frames whose +Z is the pole and whose prime meridian comes back after one sidereal day.
 - `test_kepler` covers Kepler's equation (elliptic and hyperbolic) to 1e-12, circular and eccentric orbits (by mean and by eccentric anomaly), the state ↔ elements round trip, and table interpolation that is exact against a synthetic Phobos-like orbit.
 - `test_element_table` covers the moon and dwarf-planet element tables: loading a catalogue CSV by column name and sorting it by epoch, the error for a table with no rows, linear a, e and i between samples, node and argument of periapsis taking the shorter arc across 0/360, the mean longitude unwrapped by the whole turns the first sample predicts, and two-body propagation (flagged as extrapolated) before the first sample, after the last and around a single sample.
 - `test_time` covers Julian Dates, leap seconds and TDB − UTC, and ISO parsing.
