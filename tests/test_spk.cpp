@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -21,12 +22,19 @@ namespace {
 constexpr size_t kWordsPerRecord = 128;  // a DAF record is 1024 bytes of 8-byte words
 constexpr size_t kSummaryWords = 5;      // ND = 2 doubles + NI = 6 ints, in 2 + 3 words
 const std::string kPath = "test_spk.bsp";
+const double kNaN = std::numeric_limits<double>::quiet_NaN();
+const double kInfinity = std::numeric_limits<double>::infinity();
 
 // Where the first summary's integers sit: record 2, past NEXT, PREV, NSUM and
 // the two doubles. The last two are the segment's first and last word addresses.
 constexpr size_t kFirstSummaryInts = (kWordsPerRecord + 3 + 2) * 8;
 constexpr size_t kFirstSummaryBegin = kFirstSummaryInts + 16;
 constexpr size_t kFirstSummaryEnd = kFirstSummaryInts + 20;
+
+// A summary record's NEXT and NSUM, as word indexes, for record `r` of the file
+// (1-based, as NEXT and FWARD count them).
+constexpr size_t nextWord(size_t r) { return (r - 1) * kWordsPerRecord; }
+constexpr size_t nsumWord(size_t r) { return nextWord(r) + 2; }
 
 // One Chebyshev record's coefficients; the three lists have the same length.
 struct Record {
@@ -323,6 +331,75 @@ int main() {
     putWord(bad, recordCountWord, 1000);  // more records than the segment holds
     err = loadError(bad);
     CHECK_MSG(contains(err, "malformed type 2 segment for target 3"), err);
+
+    SECTION("a directory with no usable interval, size or count is refused");
+    const size_t intervalWord = recordSizeWord - 1, initWord = intervalWord - 1;
+    for (double interval : {0.0, -200.0, kNaN, kInfinity}) {
+        bad = good;
+        putWord(bad, intervalWord, interval);
+        err = loadError(bad);
+        CHECK_MSG(contains(err, "malformed type 2 segment for target 3"), err);
+    }
+    bad = good;
+    putWord(bad, initWord, kNaN);
+    err = loadError(bad);
+    CHECK_MSG(contains(err, "malformed type 2 segment for target 3"), err);
+    for (size_t word : {recordSizeWord, recordCountWord}) {
+        for (double value : {kNaN, 1e300, -1e300}) {
+            bad = good;
+            putWord(bad, word, value);
+            err = loadError(bad);
+            CHECK_MSG(contains(err, "malformed type 2 segment for target 3"), err);
+        }
+    }
+
+    SECTION("an interval too small to index by still picks a record");
+    bad = good;
+    putWord(bad, intervalWord, 1e-300);
+    const SpkFile tiny = load(bad);
+    CHECK(same(tiny.position(3, 0, 200), {1, 0, 0}));
+    CHECK(same(tiny.position(3, 0, 0), {1, 0, 0}));
+
+    SECTION("a type 2 segment too short for its directory is refused");
+    bad = good;
+    putInt(bad, kFirstSummaryBegin, 1);  // the first three words of the file
+    putInt(bad, kFirstSummaryEnd, 3);
+    err = loadError(bad);
+    CHECK_MSG(contains(err, "malformed type 2 segment for target 3"), err);
+    bad = good;
+    putInt(bad, kFirstSummaryBegin, static_cast<int32_t>(good.size() / 8));  // one word, the last
+    err = loadError(bad);
+    CHECK_MSG(contains(err, "malformed type 2 segment for target 3"), err);
+    const Fake shortOther{7, 0, 3, 60, 70, {0}};  // only type 2 has a directory to read
+    CHECK(load(image({still(3, 0, 0, 200, 1), shortOther})).segments().size() == 1);
+
+    SECTION("a summary count that does not fit its record is refused");
+    const std::vector<Fake> full(25, still(3, 0, 0, 200, 1));
+    CHECK(load(image(full)).segments().size() == 25);  // 3 + 25 * 5 words, the whole record
+    for (double nsum : {26.0, 1e6, 1e300, -1.0, kNaN}) {
+        bad = good;
+        putWord(bad, nsumWord(2), nsum);
+        err = loadError(bad);
+        CHECK_MSG(contains(err, kPath) && contains(err, "too many summaries"), err);
+    }
+
+    SECTION("a NEXT outside the file is refused");
+    for (double next : {1e6, 1e300, -1.0, kNaN}) {
+        bad = good;
+        putWord(bad, nextWord(2), next);
+        err = loadError(bad);
+        CHECK_MSG(contains(err, kPath) && contains(err, "summary record out of range"), err);
+    }
+
+    SECTION("a loop in the summary records is refused");
+    bad = good;
+    putWord(bad, nextWord(2), 2);  // the only record, pointing at itself
+    err = loadError(bad);
+    CHECK_MSG(contains(err, kPath) && contains(err, "summary records form a loop"), err);
+    bad = image(three, 1);  // records 2, 3 and 4, in that order
+    putWord(bad, nextWord(4), 3);
+    err = loadError(bad);
+    CHECK_MSG(contains(err, kPath) && contains(err, "summary records form a loop"), err);
 
     SECTION("a kernel with no usable segments is refused");
     err = loadError(image({}));
