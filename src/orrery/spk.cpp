@@ -1,8 +1,10 @@
 #include "orrery/spk.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 
 namespace orrery {
@@ -37,13 +39,29 @@ SpkFile::SpkFile(const std::string& path) {
     // Summary records: a linked list of 1024-byte records, each holding
     // NEXT, PREV, NSUM and then NSUM summaries of ND doubles + NI ints.
     const size_t summaryWords = static_cast<size_t>(nd) + static_cast<size_t>((ni + 1) / 2);
+    const size_t recordWords = kRecordBytes / 8;
+    const size_t fileRecords = words_.size() / recordWords;
+    const size_t maxSummaries = (recordWords - 3) / summaryWords;
+    // The largest record number and word count that are both real and fit an int.
+    const size_t intMax = static_cast<size_t>(std::numeric_limits<int>::max());
+    const double maxRecord = static_cast<double>(std::min(fileRecords, intMax));
+    const double maxWords = static_cast<double>(std::min(words_.size(), intMax));
+    std::vector<bool> visited(fileRecords + 1, false);  // by 1-based record number
     int record = fward;
     bool first = true;
     while (record > 0) {
-        const size_t base = static_cast<size_t>(record - 1) * (kRecordBytes / 8);
-        if (base + 3 > words_.size()) bad(path, "summary record out of range");
-        const int next = static_cast<int>(words_[base]);
-        const int count = static_cast<int>(words_[base + 2]);
+        if (static_cast<size_t>(record) > fileRecords) bad(path, "summary record out of range");
+        if (visited[static_cast<size_t>(record)]) bad(path, "summary records form a loop");
+        visited[static_cast<size_t>(record)] = true;
+        const size_t base = static_cast<size_t>(record - 1) * recordWords;
+        // Checked as doubles, written so a NaN fails: a damaged word may not fit an int.
+        const double nextWord = words_[base], countWord = words_[base + 2];
+        if (!(nextWord >= 0 && nextWord <= maxRecord)) bad(path, "summary record out of range");
+        if (!(countWord >= 0 && countWord <= static_cast<double>(maxSummaries))) {
+            bad(path, "summary record holds too many summaries");
+        }
+        const int next = static_cast<int>(nextWord);
+        const int count = static_cast<int>(countWord);
         for (int i = 0; i < count; ++i) {
             const size_t at = base + 3 + static_cast<size_t>(i) * summaryWords;
             Segment s;
@@ -58,14 +76,23 @@ SpkFile::SpkFile(const std::string& path) {
             const size_t begin = static_cast<size_t>(ints[4]) - 1, end = static_cast<size_t>(ints[5]) - 1;
             if (end >= words_.size() || begin > end) bad(path, "segment addresses out of range");
             if (s.type != 2) continue;  // only Chebyshev position segments are used
+            const std::string malformed = "malformed type 2 segment for target " + std::to_string(s.target);
+            if (end - begin < 3) bad(path, malformed);  // no room for the four-word directory
             s.init = words_[end - 3];
             s.intervalLength = words_[end - 2];
-            s.recordSize = static_cast<int>(words_[end - 1]);
-            s.recordCount = static_cast<int>(words_[end]);
+            if (!std::isfinite(s.init) || !std::isfinite(s.intervalLength) || s.intervalLength <= 0) {
+                bad(path, malformed);
+            }
+            const double sizeWord = words_[end - 1], recordsWord = words_[end];
+            if (!(sizeWord >= 5 && sizeWord <= maxWords && recordsWord >= 1 && recordsWord <= maxWords)) {
+                bad(path, malformed);
+            }
+            s.recordSize = static_cast<int>(sizeWord);
+            s.recordCount = static_cast<int>(recordsWord);
             s.firstWord = begin;
-            if (s.recordSize < 5 || (s.recordSize - 2) % 3 != 0 || s.recordCount < 1 ||
+            if ((s.recordSize - 2) % 3 != 0 ||
                 begin + static_cast<size_t>(s.recordSize) * static_cast<size_t>(s.recordCount) > end - 3) {
-                bad(path, "malformed type 2 segment for target " + std::to_string(s.target));
+                bad(path, malformed);
             }
             if (first) {
                 coverageStart_ = s.startEt;
@@ -90,9 +117,9 @@ const SpkFile::Segment* SpkFile::find(int target, double et) const {
 }
 
 void SpkFile::evaluate(const Segment& s, double et, Vec3& position, Vec3* velocity) const {
-    int index = static_cast<int>(std::floor((et - s.init) / s.intervalLength));
-    if (index < 0) index = 0;
-    if (index >= s.recordCount) index = s.recordCount - 1;
+    // Clamped as a double: a tiny interval gives a quotient that does not fit an int.
+    const double slot = std::floor((et - s.init) / s.intervalLength);
+    const int index = slot <= 0 ? 0 : slot >= s.recordCount ? s.recordCount - 1 : static_cast<int>(slot);
     const double* rec = &words_[s.firstWord + static_cast<size_t>(index) * static_cast<size_t>(s.recordSize)];
     const double mid = rec[0], radius = rec[1];
     const int n = (s.recordSize - 2) / 3;  // coefficients per component
