@@ -67,8 +67,11 @@ double taiMinusUtc(double jdUtc) {
 double utcToTdb(double jdUtc) { return jdUtc + (taiMinusUtc(jdUtc) + 32.184) / kSecondsPerDay; }
 
 double tdbToUtc(double jdTdb) {
+    // TAI - UTC is read at a UTC, which is what is being found. The first estimate,
+    // using today's offset, can land before a step the real UTC is just past; the
+    // pass from it lands past the step, whatever it was, so the second reads it right.
     double utc = jdTdb - (37.0 + 32.184) / kSecondsPerDay;
-    utc = jdTdb - (taiMinusUtc(utc) + 32.184) / kSecondsPerDay;
+    for (int pass = 0; pass < 2; ++pass) utc = jdTdb - (taiMinusUtc(utc) + 32.184) / kSecondsPerDay;
     return utc;
 }
 
@@ -95,8 +98,9 @@ bool parseIsoDate(const std::string& text, CalendarDate& out) {
     (void)sep;
     if (*s == 'Z') ++s;
     if (*s != '\0') return false;
+    // %lf reads "nan", so the seconds' test is one a NaN fails.
     if (c.month < 1 || c.month > 12 || c.day < 1 || c.day > 31 || c.hour < 0 || c.hour > 23 || c.minute < 0 ||
-        c.minute > 59 || c.second < 0 || c.second >= 61)
+        c.minute > 59 || !(c.second >= 0 && c.second < 61))
         return false;
     // Reject 2026-02-31 and the like by a round trip.
     const CalendarDate back = calendarDate(julianDate({c.year, c.month, c.day, 12, 0, 0}));
