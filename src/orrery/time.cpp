@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 
 namespace orrery {
@@ -75,30 +76,68 @@ double tdbToUtc(double jdTdb) {
     return utc;
 }
 
+namespace {
+
+bool isDigit(char ch) { return ch >= '0' && ch <= '9'; }
+
+// Reads exactly `width` ASCII digits at s and advances past them. No sign, no
+// whitespace and no shorter field: "2026-1-5" and "T 6:30" are not dates here.
+bool readDigits(const char*& s, int width, int& value) {
+    int v = 0;
+    for (int i = 0; i < width; ++i) {
+        if (!isDigit(s[i])) return false;
+        v = v * 10 + (s[i] - '0');
+    }
+    s += width;
+    value = v;
+    return true;
+}
+
+bool expect(const char*& s, char ch) {
+    if (*s != ch) return false;
+    ++s;
+    return true;
+}
+
+}  // namespace
+
 bool parseIsoDate(const std::string& text, CalendarDate& out) {
     CalendarDate c;
     c.hour = c.minute = 0;
     c.second = 0;
-    char sep = 0;
-    int consumed = 0;
     const char* s = text.c_str();
-    if (std::sscanf(s, "%d-%d-%d%n", &c.year, &c.month, &c.day, &consumed) != 3) return false;
-    s += consumed;
+    if (!readDigits(s, 4, c.year) || !expect(s, '-') || !readDigits(s, 2, c.month) || !expect(s, '-') ||
+        !readDigits(s, 2, c.day))
+        return false;
     if (*s == 'T' || *s == ' ') {
-        sep = *s++;
-        int n = 0;
-        if (std::sscanf(s, "%d:%d%n", &c.hour, &c.minute, &n) != 2) return false;
-        s += n;
+        ++s;
+        if (!readDigits(s, 2, c.hour) || !expect(s, ':') || !readDigits(s, 2, c.minute)) return false;
         if (*s == ':') {
             ++s;
-            if (std::sscanf(s, "%lf%n", &c.second, &n) != 1) return false;
-            s += n;
+            // Seconds are two digits with an optional decimal fraction: no exponent,
+            // no hex float, no "nan" — only what the header documents.
+            int whole = 0;
+            if (!readDigits(s, 2, whole)) return false;
+            c.second = whole;
+            if (*s == '.') {
+                ++s;
+                if (!isDigit(*s)) return false;
+                // Up to 15 digits are kept exactly and divided once, so "15.3" reads
+                // as the double nearest 15.3; further digits are below a femtosecond.
+                double numerator = 0.0, denominator = 1.0;
+                for (int kept = 0; isDigit(*s); ++s) {
+                    if (kept++ < 15) {
+                        numerator = numerator * 10.0 + (*s - '0');
+                        denominator *= 10.0;
+                    }
+                }
+                c.second += numerator / denominator;
+            }
         }
     }
-    (void)sep;
     if (*s == 'Z') ++s;
-    if (*s != '\0') return false;
-    // %lf reads "nan", so the seconds' test is one a NaN fails.
+    // An embedded NUL ends c_str() early, so compare the length too.
+    if (*s != '\0' || static_cast<std::size_t>(s - text.c_str()) != text.size()) return false;
     if (c.month < 1 || c.month > 12 || c.day < 1 || c.day > 31 || c.hour < 0 || c.hour > 23 || c.minute < 0 ||
         c.minute > 59 || !(c.second >= 0 && c.second < 61))
         return false;

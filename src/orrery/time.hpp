@@ -30,7 +30,9 @@ double utcToTdb(double jdUtc);
 double tdbToUtc(double jdTdb);
 
 // "2026-10-18", "2026-10-18T06:30", "2026-10-18T06:30:15" or with a space;
-// a trailing 'Z' is allowed. Returns false on anything else.
+// seconds may carry a decimal fraction ("06:30:15.5") and a trailing 'Z' is
+// allowed. Every field has its fixed width in ASCII digits (no sign, no spaces,
+// no exponent). Returns false on anything else, and leaves `out` unchanged.
 bool parseIsoDate(const std::string& text, CalendarDate& out);
 std::string formatIsoDate(const CalendarDate& c, bool withSeconds = true);
 
