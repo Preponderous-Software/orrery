@@ -106,6 +106,19 @@ int main() {
         CHECK_MSG(!parseIsoDate(bad, c), bad);
     }
 
+    SECTION("ISO date parsing: every field has its fixed width in digits");
+    for (const char* bad : {"2026-1-5", "2026-10-8", "226-10-18", "02026-10-18", "2026-+1-18", "2026--1-18",
+                            "+2026-10-18", " 2026-10-18", "2026-10-18T 6:30", "2026-10-18T6:30", "2026-10-18T06:3",
+                            "2026-10-18T06:30:1", "2026-10-18T06:30:1e1", "2026-10-18T06:30:0x10",
+                            "2026-10-18T06:30:15.", "2026-10-18T06:30:15.5e1", "2026-10-18T06:30:+5",
+                            "2026-10-18T06:30:15 ", "2026-10-18T06:30:15.5Z "}) {
+        CHECK_MSG(!parseIsoDate(bad, c), bad);
+    }
+    CHECK(!parseIsoDate(std::string("2026-10-18\0junk", 15), c));  // text past an embedded NUL is not ignored
+    CHECK(parseIsoDate("2026-10-18T06:30:15.25Z", c) && c.second == 15.25);
+    CHECK(parseIsoDate("2026-10-18T06:30:15.3", c) && c.second == 15.3);
+    CHECK(parseIsoDate("2026-10-18T06:30:59.999", c) && c.second == 59.999);
+
     SECTION("ISO date formatting");
     CHECK(formatIsoDate({2026, 10, 18, 6, 5, 4.9}) == "2026-10-18 06:05:04");
     CHECK(formatIsoDate({2026, 10, 18, 6, 5, 4.9}, false) == "2026-10-18 06:05");
