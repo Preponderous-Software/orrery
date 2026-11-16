@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "check.hpp"
 #include "orrery/csv.hpp"
@@ -220,6 +221,59 @@ int main() {
         CHECK(sys.frame(earth, jd + sidereal, later) && sys.frame(earth, jd + sidereal / 2, half));
         CHECK(dot(f.x, later.x) > 1 - 1e-9);
         CHECK(dot(f.x, half.x) < -1 + 1e-6);
+    }
+
+    SECTION("body kinds and rings: the names the HUD and the USD layer print, and the ring catalogue");
+    {
+        // kindName is what the HUD shows after a body's name and what the USD
+        // layer writes as its `kind`, so every kind has its own word.
+        CHECK(std::string(kindName(BodyKind::Star)) == "star");
+        CHECK(std::string(kindName(BodyKind::Planet)) == "planet");
+        CHECK(std::string(kindName(BodyKind::Dwarf)) == "dwarf planet");
+        CHECK(std::string(kindName(BodyKind::Moon)) == "moon");
+        CHECK(std::string(kindName(BodyKind::Comet)) == "comet");
+        CHECK(std::string(kindName(BodyKind::Spacecraft)) == "spacecraft");
+        auto kindOf = [&](const char* name) {
+            const int i = body(name);
+            return i < 0 ? std::string("absent") : std::string(kindName(sys.bodies()[static_cast<size_t>(i)].kind));
+        };
+        CHECK(kindOf("Sun") == "star");
+        CHECK(kindOf("Earth") == "planet");
+        CHECK(kindOf("Pluto") == "dwarf planet");
+        CHECK(kindOf("Ceres") == "dwarf planet");
+        CHECK(kindOf("Moon") == "moon");
+        CHECK(kindOf("Charon") == "moon");
+        CHECK(kindOf("Halley") == "comet");
+        CHECK(kindOf("Voyager 1") == "spacecraft");
+
+        // The rings are tools/bodies.py's NSSDCA radii (committed constants,
+        // not fetched data), in its order: Saturn's D, C, B, A and F rings,
+        // then Uranus's epsilon ring. Each belongs to its planet, lies outside
+        // the planet's drawn sphere, and has a display colour and opacity in
+        // range.
+        struct Expected {
+            const char* planet;
+            const char* name;
+            double innerKm, outerKm;
+        };
+        const Expected expected[] = {
+            {"Saturn", "D ring", 66900, 74510},  {"Saturn", "C ring", 74658, 91975},
+            {"Saturn", "B ring", 91975, 117507}, {"Saturn", "A ring", 122340, 136780},
+            {"Saturn", "F ring", 139801, 139851}, {"Uranus", "epsilon ring", 51119, 51179},
+        };
+        const std::vector<Ring>& rings = sys.rings();
+        CHECK(rings.size() == sizeof expected / sizeof expected[0]);
+        for (size_t k = 0; k < rings.size() && k < sizeof expected / sizeof expected[0]; ++k) {
+            const Ring& ring = rings[k];
+            const Expected& e = expected[k];
+            CHECK_MSG(ring.name == e.name, ring.name);
+            CHECK_MSG(ring.planet == body(e.planet), ring.name);
+            CHECK_MSG(ring.innerKm == e.innerKm && ring.outerKm == e.outerKm, ring.name);
+            CHECK_MSG(ring.planet >= 0 && ring.innerKm > sys.bodies()[static_cast<size_t>(ring.planet)].radiusKm,
+                      ring.name);
+            for (float c : ring.color) CHECK_MSG(c >= 0 && c <= 1, ring.name);
+            CHECK_MSG(ring.alpha > 0 && ring.alpha <= 1, ring.name);
+        }
     }
     return check::finish();
 }
