@@ -51,8 +51,8 @@ the second line of the on-screen text always says which one is showing.
 
 ## Building and running
 
-**Downloads.** Releases made once `release.yml` is on `main` carry Windows x64 and Linux x64
-downloads ([docs/RELEASING.md](docs/RELEASING.md)). They hold no JPL data: their `play-orrery`
+**Downloads.** Releases from 0.7.0 on carry Windows x64 and Linux x64 downloads
+([docs/RELEASING.md](docs/RELEASING.md)). They hold no JPL data: their `play-orrery`
 script fetches it from JPL on the first run, so they need uv and the network then, too.
 
 You need CMake 3.24 or newer, a C++17 compiler and OpenGL 4.5. Mesa's
