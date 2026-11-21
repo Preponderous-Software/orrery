@@ -284,8 +284,20 @@ async function shot(page, name) {
         HTMLCanvasElement.prototype.getContext = function (t, o) { return t === 'webgl2' ? null : get.call(this, t, o); };
       });
       const p2 = await bare.newPage();
+      // Strata v0.10.0 starts the .wasm download before its WebGL 2 probe (so
+      // the two overlap on a phone) and cancels it when the probe fails. So a
+      // .wasm request may start, but it must be cancelled, never finish; the
+      // glue and the data package must not be asked for at all.
       const engine = [];
-      p2.on('request', (r) => { if (/index\.(wasm|data|js)$/.test(r.url())) engine.push(r.url()); });
+      const wasmStarted = new Set();
+      const wasmCancelled = new Set();
+      p2.on('request', (r) => {
+        if (/index\.(data|js)$/.test(r.url())) engine.push(r.url());
+        if (/index\.wasm$/.test(r.url())) wasmStarted.add(r);
+      });
+      p2.on('requestfailed', (r) => { if (wasmStarted.has(r)) wasmCancelled.add(r); });
+      const wasmFinished = new Set();
+      p2.on('requestfinished', (r) => { if (wasmStarted.has(r)) { wasmFinished.add(r); engine.push(r.url() + ' (finished)'); } });
       await p2.goto(url, { waitUntil: 'commit' });
       await p2.waitForFunction(() => window.StrataLoader && StrataLoader.state === 'fallback', null, { timeout: 30000 });
       const fb = await p2.evaluate(() => {
@@ -293,7 +305,10 @@ async function shot(page, name) {
         return { text: r.innerText, media: !!r.querySelector('video, img'), wide: document.documentElement.scrollWidth > innerWidth };
       });
       check(/WebGL 2/.test(fb.text) && fb.media && !fb.wide, 'without WebGL 2 the shell shows the trailer and says why');
-      check(engine.length === 0, 'and nothing of the engine downloads');
+      // The cancellation is reported a moment after the fallback shows.
+      for (let i = 0; i < 50 && wasmCancelled.size + wasmFinished.size < wasmStarted.size; i++) await p2.waitForTimeout(100);
+      check(engine.length === 0 && wasmCancelled.size === wasmStarted.size,
+        'and nothing of the engine downloads (a started .wasm request is cancelled)');
       await p2.screenshot({ path: path.join(out, 'no-webgl2.png') });
       await bare.close();
     }
