@@ -20,15 +20,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
-#include <map>
 #include <memory>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "orrery/missions.hpp"
+#include "orrery/records/service.hpp"
 #include "orrery/system.hpp"
 #include "orrery/time.hpp"
 #include "renderer.hpp"
@@ -173,22 +171,6 @@ const char* touchdownName(Touchdown::Grade g) {
     }
 }
 
-#if !defined(__EMSCRIPTEN__)
-// Where the desktop build keeps the mission records: $ORRERY_RECORDS, else the
-// user's data directory. The browser build keeps them in the page's storage.
-std::filesystem::path recordsPath() {
-    namespace fs = std::filesystem;
-    if (const char* p = std::getenv("ORRERY_RECORDS"); p && *p) return p;
-#if defined(_WIN32)
-    if (const char* a = std::getenv("APPDATA"); a && *a) return fs::path(a) / "orrery" / "records.txt";
-#else
-    if (const char* x = std::getenv("XDG_DATA_HOME"); x && *x) return fs::path(x) / "orrery" / "records.txt";
-    if (const char* h = std::getenv("HOME"); h && *h) return fs::path(h) / ".local" / "share" / "orrery" / "records.txt";
-#endif
-    return {};
-}
-#endif
-
 #if defined(__EMSCRIPTEN__)
 // A JSON string literal (the mission list's text has no control characters).
 std::string jsonText(const std::string& s) {
@@ -281,9 +263,7 @@ struct World {
 
     // ---- missions (I): timed goals for the ship, with the best time kept per device
     MissionRun mission;
-    std::map<std::string, double> records;
-    std::filesystem::path recordsFile;  // desktop: where the records are saved; empty = not saved
-    int recordsVersion = 0;             // bumped with each new best (the page saves the records then)
+    RecordBook records = unkeptRecords();  // the desktop opens its records.txt at start (main)
     bool newBest = false;               // the finished mission set a record
     bool panel = false;                 // the mission list is open
     int missionPending = -1;            // --mission: start it on the first frame
@@ -361,25 +341,9 @@ struct World {
 
     void finishMission() {
         const Mission& m = *mission.mission();
-        newBest = recordTime(records, m.id, mission.seconds());
+        newBest = records.finish(m.id, mission.seconds());
         std::printf("mission %s complete in %s (%.2f s)%s\n", m.id.c_str(), clockText(mission.seconds()).c_str(),
                     mission.seconds(), newBest ? ", a new best" : "");
-        if (!newBest) return;
-        ++recordsVersion;
-        if (recordsFile.empty()) return;
-        std::error_code ec;
-        std::filesystem::create_directories(recordsFile.parent_path(), ec);
-        std::ofstream out(recordsFile, std::ios::binary | std::ios::trunc);
-        out << formatRecords(records);
-        if (!out) std::fprintf(stderr, "could not save the mission records to %s\n", recordsFile.string().c_str());
-    }
-
-    void loadRecords() {
-        std::ifstream in(recordsFile, std::ios::binary);
-        if (!in) return;  // none yet
-        std::ostringstream text;
-        text << in.rdbuf();
-        records = parseRecords(text.str());
     }
 
     // The HUD's mission line, the goal under it, and the mission list.
@@ -390,8 +354,8 @@ struct World {
         view.panel.clear();
         const Mission* m = mission.mission();
         auto best = [this](const std::string& id) {
-            const auto it = records.find(id);
-            return it == records.end() ? std::string() : "best " + clockText(it->second);
+            const auto it = records.records().find(id);
+            return it == records.records().end() ? std::string() : "best " + clockText(it->second);
         };
         if (m && mission.complete()) {
             view.missionLine = "COMPLETE  " + m->title + "  " + clockText(mission.seconds());
@@ -810,7 +774,7 @@ struct Interactive {
                       ship.touchdown().impactKmPerS, ship.heat(), ship.air(), ship.fuel(), w->panel ? "true" : "false",
                       run.mission() ? run.mission()->id.c_str() : "", run.mission() ? run.goalsDone() : 0,
                       run.mission() ? run.goalCount() : 0, run.seconds(), run.complete() ? "true" : "false",
-                      w->newBest ? "true" : "false", w->recordsVersion);
+                      w->newBest ? "true" : "false", w->records.version());
         status = buf;
         return status.c_str();
     }
@@ -883,10 +847,11 @@ EMSCRIPTEN_KEEPALIVE const char* orrery_mission_json(int index) {
     static std::string json;
     if (!gLive || index < 0 || index >= orrery_mission_count()) return "{}";
     const Mission& m = missions()[static_cast<size_t>(index)];
-    const auto it = gLive->w->records.find(m.id);
+    const auto& records = gLive->w->records.records();
+    const auto it = records.find(m.id);
     char buf[64];
     std::snprintf(buf, sizeof buf, ",\"par\":%.3f,\"best\":%.3f}", m.parSeconds,
-                  it == gLive->w->records.end() ? 0.0 : it->second);
+                  it == records.end() ? 0.0 : it->second);
     json = "{\"id\":" + jsonText(m.id) + ",\"kind\":" + jsonText(m.kind) + ",\"title\":" + jsonText(m.title) +
            ",\"brief\":" + jsonText(m.brief) + buf;
     return json.c_str();
@@ -897,11 +862,11 @@ EMSCRIPTEN_KEEPALIVE void orrery_abandon_mission() {
 }
 EMSCRIPTEN_KEEPALIVE const char* orrery_records() {
     static std::string text;
-    text = gLive ? formatRecords(gLive->w->records) : "";
+    text = gLive ? formatRecords(gLive->w->records.records()) : "";
     return text.c_str();
 }
 EMSCRIPTEN_KEEPALIVE void orrery_load_records(const char* text) {
-    if (gLive && text) gLive->w->records = parseRecords(text);
+    if (gLive && text) gLive->w->records.replace(parseRecords(text));
 }
 EMSCRIPTEN_KEEPALIVE int orrery_body_count() { return gLive ? static_cast<int>(gLive->w->sys->bodies().size()) : 0; }
 EMSCRIPTEN_KEEPALIVE const char* orrery_body_name(int body) {
@@ -1088,8 +1053,7 @@ int main(int argc, char** argv) {
         if (world->engine->driven()) {
             std::puts("orrery: driven by a test harness; mission records are not read or written");
         } else {
-            world->recordsFile = recordsPath();
-            world->loadRecords();
+            world->records = openDesktopRecords();
         }
 #endif
         auto* live = new Interactive(std::move(world), rateIndexFor(args.rate));

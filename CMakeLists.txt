@@ -62,9 +62,21 @@ add_library(orrery_core STATIC
   src/orrery/scale.cpp
   src/orrery/atmosphere.cpp
   src/orrery/flight.cpp
-  src/orrery/missions.cpp)
+  src/orrery/missions.cpp
+  src/orrery/records/record_book.cpp
+  src/orrery/records/records_path.cpp)
 target_include_directories(orrery_core PUBLIC src)
 orrery_warnings(orrery_core)
+
+# The mission records' adapters (files, the environment) and their composition
+# root, kept out of orrery_core so the core cannot reach them
+# (src/orrery/records/README.md).
+add_library(orrery_records_adapters STATIC
+  src/orrery/records/adapters/file_records_store.cpp
+  src/orrery/records/adapters/process_environment.cpp
+  src/orrery/records/service.cpp)
+target_link_libraries(orrery_records_adapters PUBLIC orrery_core)
+orrery_warnings(orrery_records_adapters)
 
 if(ORRERY_BUILD_TESTS)
   enable_testing()
@@ -93,6 +105,19 @@ if(ORRERY_BUILD_TESTS)
   target_compile_definitions(test_records PRIVATE ORRERY_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
   orrery_warnings(test_records)
   add_test(NAME records COMMAND test_records)
+  # The records' ports: the RecordBook policy on a fake store, the adapters'
+  # contract, and the records path's precedence on a fake environment.
+  add_executable(test_record_book tests/test_record_book.cpp)
+  target_link_libraries(test_record_book PRIVATE orrery_records_adapters)
+  orrery_warnings(test_record_book)
+  add_test(NAME record_book COMMAND test_record_book)
+  # The records' layers: the core and ports never include an adapter or the
+  # service, and each port and adapter header holds one type.
+  find_package(Python3 COMPONENTS Interpreter)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME records_layers COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_layers.py"
+             "${CMAKE_CURRENT_SOURCE_DIR}/src/orrery/records" --inner record_book records_path ports)
+  endif()
 endif()
 
 if(ORRERY_WITH_STRATA)
@@ -112,7 +137,7 @@ if(ORRERY_WITH_STRATA)
 
   add_executable(orrery app/main.cpp app/renderer.cpp app/usda.cpp)
   target_include_directories(orrery PRIVATE app)
-  target_link_libraries(orrery PRIVATE orrery_core orrery_stb strata::static)
+  target_link_libraries(orrery PRIVATE orrery_core orrery_records_adapters orrery_stb strata::static)
   target_compile_definitions(orrery PRIVATE ORRERY_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
   orrery_warnings(orrery)
 
