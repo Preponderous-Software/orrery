@@ -2,7 +2,10 @@
    kit's loading shell (strata-kit/strata-loader.js, vendored at a pinned
    Strata commit).
 
-   The loader expects a MODULARIZE build (a factory it calls with wasmBinary).
+   The loader expects a MODULARIZE build: a factory it calls with either
+   wasmBinary (the counted bytes) or, from Strata v0.10.0 when the .wasm is
+   served as application/wasm, instantiateWasm (a hook holding the module it
+   compiled while the bytes arrived).
    This build is a classic one: a global Module and the glue script that
    emcc writes for {{{ SCRIPT }}}, which the shell keeps inside
    <template id="strata-glue"> so that it does not run by itself. This file
@@ -11,8 +14,8 @@
    - the glue starts at once, as before, so a --preload-file data package
      downloads alongside the engine; it waits in Module.instantiateWasm;
    - the loader fetches the .wasm as a stream, shows its bytes, and hands
-     them to the factory below, which instantiates them: nothing downloads
-     twice;
+     them (or the module it compiled from them) to the factory below, which
+     instantiates them: nothing downloads twice;
    - an abort, a lost WebGL context that does not come back, and (outside
      automated browsers and ?bench) a device drawing under 12 frames a
      second all end in the loader's fallback: the trailer or the poster,
@@ -60,6 +63,15 @@
     } else if (size) {
       size.textContent = `${mb(got)} MB`;
     }
+  }
+
+  // The .wasm's size once the loader compiled it without handing the bytes
+  // over: what the browser decoded for it (Resource Timing), else 0.
+  function wasmSize() {
+    const name = opts.wasm || "";
+    const e = (performance.getEntriesByType ? performance.getEntriesByType("resource") : [])
+      .filter((r) => name && r.name.split("?")[0].endsWith(name)).pop();
+    return e && e.decodedBodySize ? e.decodedBodySize : 0;
   }
 
   // The glue's src, from the inert copy of emcc's script tag.
@@ -119,11 +131,15 @@
     opts.onFallback = (code) => { settled = true; topLinks(); if (userFallback) userFallback(code); };
 
     // The glue asks for its instance here; the factory below answers once
-    // the loader has the bytes. The factory settles with the instantiation.
+    // the loader has the engine: {bytes} to instantiate, or {hook}, the
+    // loader's own instantiateWasm around the module it already compiled.
+    // The factory settles with the instantiation.
     let give;
-    const instance = new Promise((r) => { give = r; });
+    const engine = new Promise((r) => { give = r; });
     M.instantiateWasm = (imports, ok) => {
-      instance.then((b) => WebAssembly.instantiate(b, imports))
+      engine.then((src) => src.hook
+        ? new Promise((res) => src.hook(imports, (inst) => res({instance: inst, module: undefined})))
+        : WebAssembly.instantiate(src.bytes, imports))
         .then((r) => { failNow = null; ok(r.instance, r.module); if (resolveFactory) resolveFactory(M); },
               (e) => engineFailed(String(e && e.message || e)));
       return {};
@@ -140,9 +156,19 @@
     window[FACTORY] = (args) => new Promise((resolve, reject) => {
       failNow = reject;
       resolveFactory = resolve;
-      wasmLen = args.wasmBinary.byteLength;
-      showData();
-      give(args.wasmBinary);
+      if (args.wasmBinary) {
+        wasmLen = args.wasmBinary.byteLength;
+        showData();
+        give({bytes: args.wasmBinary});
+      } else if (typeof args.instantiateWasm === "function") {
+        // Compiled while it downloaded (Strata v0.10.0+): the loader's hook
+        // instantiates it, and its error reaches the loader's fallback.
+        wasmLen = wasmSize();
+        showData();
+        give({hook: args.instantiateWasm});
+      } else {
+        reject(new Error("the loader handed over neither wasmBinary nor instantiateWasm"));
+      }
     });
 
     // No WebGL 2: the loader shows the fallback before anything downloads.
